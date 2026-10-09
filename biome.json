@@ -1,0 +1,80 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+	"vcs": {
+		"enabled": false,
+		"clientKind": "git",
+		"useIgnoreFile": true,
+		"defaultBranch": "develop",
+		"root": "./"
+	},
+	"files": {
+		"ignoreUnknown": true,
+		"includes": [
+			"**",
+			"!**/dist",
+			"!**/node_modules",
+			"!**/.firebase",
+			"!./.firebase",
+			"!.firebase",
+			"!**/.astro",
+			"!./.astro",
+			"!.astro",
+			"!**/public",
+			"!dist",
+			"!./dist",
+			"!**/*.{css}",
+			"!**/*.d.ts",
+			"!bun.lockb",
+			"!biome.json",
+			"!.agents/skills",
+			"!.github/skills/impeccable",
+			"!.github/hooks/impeccable.json",
+			"!.impeccable",
+			"!.atl",
+			"!.codex",
+			"!.vercel"
+		]
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab"
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double"
+		}
+	},
+	"assist": {
+		"enabled": false
+	},
+	"html": {
+		"experimentalFullSupportEnabled": true
+	},
+	"overrides": [
+		{
+			"includes": ["**/*.astro"],
+			"linter": {
+				"rules": {
+					"correctness": {
+						"useJsxKeyInIterable": "off"
+					}
+				}
+			}
+		},
+		{
+			"includes": [".firebase/**", "firebase.json"],
+			"linter": {
+				"rules": {
+					"style": {
+						"useConst": "off",
+						"useImportType": "off"
+					},
+					"correctness": {
+						"noUnusedVariables": "off",
+						"noUnusedImports": "off"
+					}
+				}
+			}
+		}
+	]
+}

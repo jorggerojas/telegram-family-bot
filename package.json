@@ -7,13 +7,28 @@
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
 		"test": "vitest",
-		"cf-typegen": "wrangler types"
+		"cf-typegen": "wrangler types",
+		"lint": "biome check --write .",
+		"lint:ci": "biome ci",
+		"commitlint": "commitlint",
+		"prepare": "husky",
+		"gga": "gga run || exit 1"
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-plugin": "^1.0.0",
 		"@types/node": "^26.6.4",
 		"typescript": "^5.5.2",
 		"vitest": "~4.1.0",
-		"wrangler": "^4.149.0"
+		"wrangler": "^4.149.0",
+		"@biomejs/biome": "2.5.15",
+		"@commitlint/cli": "21.2.3",
+		"@commitlint/config-conventional": "21.2.3",
+		"husky": "9.1.7",
+		"lint-staged": "17.0.7"
+	},
+	"lint-staged": {
+		"*.{js,ts,tsx,jsx,json,css,mjs}": [
+			"biome check --write --error-on-warnings --files-ignore-unknown=true"
+		]
 	}
 }
