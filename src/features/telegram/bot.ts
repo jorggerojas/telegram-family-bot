@@ -535,8 +535,11 @@ export const createBot = (
 				nowMadrid: formatMadrid(now),
 				previousDraft: draft,
 			},
-			config.geminiApiKey,
-			config.geminiModel,
+			{
+				groqApiKey: config.groqApiKey,
+				geminiApiKey: config.geminiApiKey,
+				geminiModel: config.geminiModel,
+			},
 		);
 		if (!interpreted)
 			return ctx.reply(

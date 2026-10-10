@@ -15,6 +15,7 @@ export interface AppConfig {
 	googleClientId: string;
 	googleClientSecret: string;
 	googleTokenEncryptionKey: string;
+	groqApiKey: string | null;
 	geminiApiKey: string;
 	geminiModel: string;
 	oauthSetupAdminToken: string;
@@ -50,6 +51,10 @@ const configSchema = z.object({
 	),
 	GEMINI_API_KEY: z.string().min(1),
 	GEMINI_MODEL: z.string().min(1).default("gemini-2.5-flash-lite"),
+	GROQ_API_KEY: z
+		.string()
+		.optional()
+		.transform((value) => value?.trim() || undefined),
 	OAUTH_SETUP_ADMIN_TOKEN: z.string().min(1),
 	TELEGRAM_BOT_TOKEN: z.string().min(1),
 	TELEGRAM_WEBHOOK_SECRET: z.string().min(16),
@@ -107,6 +112,7 @@ export const readConfig = (env: Record<string, unknown>): AppConfig => {
 		googleClientId: values.GOOGLE_CLIENT_ID,
 		googleClientSecret: values.GOOGLE_CLIENT_SECRET,
 		googleTokenEncryptionKey: values.GOOGLE_TOKEN_ENCRYPTION_KEY,
+		groqApiKey: values.GROQ_API_KEY ?? null,
 		geminiApiKey: values.GEMINI_API_KEY,
 		geminiModel: values.GEMINI_MODEL,
 		oauthSetupAdminToken: values.OAUTH_SETUP_ADMIN_TOKEN,

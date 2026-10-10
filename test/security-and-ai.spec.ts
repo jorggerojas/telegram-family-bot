@@ -15,10 +15,18 @@ const baseConfig = {
 	TELEGRAM_WEBHOOK_SECRET: "0123456789abcdef",
 	WORKER_BASE_URL: "https://example.com",
 };
+const aiProviders = {
+	groqApiKey: null,
+	geminiApiKey: "key",
+	geminiModel: "model",
+};
 
 describe("private integration boundaries", () => {
 	it("requires exactly Alex and Sam numeric allowlist IDs", () => {
 		expect(readConfig(baseConfig).allowedUsers.get("100")).toBe("Alex");
+		expect(
+			readConfig({ ...baseConfig, GROQ_API_KEY: "" }).groqApiKey,
+		).toBeNull();
 		expect(() =>
 			readConfig({
 				...baseConfig,
@@ -109,13 +117,82 @@ describe("private integration boundaries", () => {
 			previousDraft: null,
 		};
 		expect(
-			(await interpretMessage(input, "key", "model", goodFetch))?.intent,
+			(await interpretMessage(input, aiProviders, goodFetch))?.intent,
 		).toBe("CREATE_EVENT");
 		const failedFetch: typeof fetch = async () =>
 			new Response("no", { status: 429 });
+		expect(await interpretMessage(input, aiProviders, failedFetch)).toBeNull();
+	});
+
+	it("uses Groq first and falls back to Gemini on provider failure", async () => {
+		const input = {
+			message: "dentista mañana a las 18",
+			sender: "Sam",
+			nowMadrid: "09/10/26, 14:00",
+			previousDraft: null,
+		};
+		const result = {
+			intent: "CREATE_EVENT",
+			title: "Cita con dentista de Sam",
+			location: null,
+			search: null,
+			day: 10,
+			month: 10,
+			year: 2026,
+			weekday: "sabado",
+			hour: 18,
+			minute: 0,
+			duration_minutes: null,
+			all_day: false,
+			missing: [],
+			fields: ["title", "date", "time"],
+		};
+		const calls: string[] = [];
+		const groqFetch: typeof fetch = async (input, init) => {
+			calls.push(String(input));
+			expect(new Headers(init?.headers).get("authorization")).toBe(
+				"Bearer groq-key",
+			);
+			const body = JSON.parse(String(init?.body));
+			expect(body.model).toBe("openai/gpt-oss-20b");
+			expect(body.response_format).toEqual({ type: "json_object" });
+			return Response.json({
+				choices: [{ message: { content: JSON.stringify(result) } }],
+			});
+		};
 		expect(
-			await interpretMessage(input, "key", "model", failedFetch),
-		).toBeNull();
+			await interpretMessage(
+				input,
+				{ ...aiProviders, groqApiKey: "groq-key" },
+				groqFetch,
+			),
+		).toMatchObject({ intent: "CREATE_EVENT" });
+		expect(calls).toHaveLength(1);
+		calls.length = 0;
+		const fetcher: typeof fetch = async (input) => {
+			const url = String(input);
+			calls.push(url);
+			if (url.includes("api.groq.com"))
+				return new Response("payment required", { status: 402 });
+			return Response.json({
+				candidates: [
+					{
+						finishReason: "STOP",
+						content: { parts: [{ text: JSON.stringify(result) }] },
+					},
+				],
+			});
+		};
+		expect(
+			await interpretMessage(
+				input,
+				{ ...aiProviders, groqApiKey: "groq-key" },
+				fetcher,
+			),
+		).toMatchObject({ intent: "CREATE_EVENT" });
+		expect(calls).toHaveLength(2);
+		expect(calls[0]).toContain("api.groq.com/openai/v1/chat/completions");
+		expect(calls[1]).toContain("generativelanguage.googleapis.com");
 	});
 
 	it("rejects incomplete, refusal, and schema-invalid structured output", async () => {
@@ -149,7 +226,7 @@ describe("private integration boundaries", () => {
 		];
 		for (const response of responses) {
 			expect(
-				await interpretMessage(input, "key", "model", async () =>
+				await interpretMessage(input, aiProviders, async () =>
 					Response.json(response),
 				),
 			).toBeNull();
