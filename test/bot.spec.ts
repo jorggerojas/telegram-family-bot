@@ -202,13 +202,15 @@ const setup = (
 		},
 	} as unknown as Repository;
 	let inserts = 0;
+	let insertedEventId = "";
 	let patches = 0;
 	let deletes = 0;
 	let aiCalls = 0;
 	const calendar = {
 		nearbyBusy: async () => events.filter((item) => item.id !== "event1"),
-		insert: async () => {
+		insert: async (id: string) => {
 			inserts += 1;
+			insertedEventId = id;
 			return { ...event, id: "saved" };
 		},
 		patch: async (_id: string, _etag: string, mutation: typeof event) => {
@@ -254,6 +256,7 @@ const setup = (
 		aiCalls: () => aiCalls,
 		claims: () => claims,
 		counts: () => ({ inserts, patches, deletes }),
+		insertedEventId: () => insertedEventId,
 		create: () => createBot(config, repository, calendar, () => new Date(now)),
 		restore,
 		sent,
@@ -342,6 +345,8 @@ describe("Telegram confirmation workflow", () => {
 			const id = [...test.actions.keys()][0];
 			await bot.handleUpdate(callbackUpdate(2, `c:${id}`));
 			expect(test.counts().inserts).toBe(1);
+			expect(test.insertedEventId()).toBe(id);
+			expect(id).toMatch(/^[0-9a-v]{5,1024}$/);
 		} finally {
 			test.restore();
 		}

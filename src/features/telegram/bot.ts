@@ -803,7 +803,7 @@ export const createBot = (
 		try {
 			if (action.kind === ACTIONS.CREATE && payload.event) {
 				const created = await calendar.insert(
-					`family${action.id}`,
+					action.id,
 					payload.event,
 					action.id,
 					{ name: sender, telegramId: String(ctx.from.id) },

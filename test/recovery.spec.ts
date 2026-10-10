@@ -97,7 +97,7 @@ describe("recovered calendar confirmations", () => {
 					mutationRequests += 1;
 				if (kind === "delete") return new Response(null, { status: 410 });
 				return Response.json({
-					id: kind === "create" ? `family${id}` : "event1",
+					id: kind === "create" ? id : "event1",
 					etag: "etag1",
 					...mutation,
 					extendedProperties: { private: { family_action_id: id } },
@@ -122,7 +122,7 @@ describe("recovered calendar confirmations", () => {
 				const completed = await repository.getAction(id, "100", "100");
 				expect(completed).toMatchObject({
 					status: "done",
-					event_id: kind === "create" ? `family${id}` : "event1",
+					event_id: kind === "create" ? id : "event1",
 				});
 				expect(completed?.fence_token).not.toBe(firstClaim.fence_token);
 				expect(mutationRequests).toBe(0);

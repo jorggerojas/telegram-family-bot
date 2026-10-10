@@ -190,12 +190,12 @@ describe("Google Calendar adapter", () => {
 			Response.json({ id: config.calendarId, accessRole: "owner" }),
 			Response.json({
 				...event,
-				id: "familyaction1",
+				id: "a1b2c3",
 				extendedProperties: { private: { family_action_id: "action1" } },
 			}),
 		]);
 		const existing = await calendar.insert(
-			"familyaction1",
+			"a1b2c3",
 			{
 				summary: event.summary,
 				description: event.description,
@@ -206,7 +206,7 @@ describe("Google Calendar adapter", () => {
 			"action1",
 			{ name: "Alex", telegramId: "100" },
 		);
-		expect(existing.id).toBe("familyaction1");
+		expect(existing.id).toBe("a1b2c3");
 	});
 
 	it("reconciles a lost patch response by action marker without another patch", async () => {
