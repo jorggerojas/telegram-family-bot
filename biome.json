@@ -10,7 +10,14 @@
 	"files": {
 		"ignoreUnknown": true,
 		"includes": [
-			"**",
+			"src/**",
+			"test/**",
+			"scripts/**",
+			"migrations/**",
+			"package.json",
+			"tsconfig.json",
+			"vitest.config.mts",
+			"wrangler.jsonc",
 			"!**/dist",
 			"!**/node_modules",
 			"!**/.firebase",

@@ -1,0 +1,14 @@
+# Copy to .dev.vars. Values below are placeholders only; never commit real secrets.
+TELEGRAM_BOT_TOKEN=replace-me
+TELEGRAM_WEBHOOK_SECRET=replace-with-at-least-16-random-characters
+GEMINI_API_KEY=replace-me
+GOOGLE_CLIENT_ID=replace-me
+GOOGLE_CLIENT_SECRET=replace-me
+GOOGLE_TOKEN_ENCRYPTION_KEY=replace-with-32-byte-base64-key
+OAUTH_SETUP_ADMIN_TOKEN=replace-me
+ALLOWED_TELEGRAM_USERS_JSON={"123456789":"Alex","987654321":"Sam"}
+GOOGLE_CALENDAR_ID=family-calendar-id@group.calendar.google.com
+WORKER_BASE_URL=https://your-worker.workers.dev
+DEFAULT_TIME_ZONE=Europe/Madrid
+GEMINI_MODEL=gemini-2.5-flash-lite
+DEFAULT_EVENT_DURATION_MINUTES=60
