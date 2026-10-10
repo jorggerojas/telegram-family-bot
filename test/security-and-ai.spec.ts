@@ -156,6 +156,7 @@ describe("private integration boundaries", () => {
 			const body = JSON.parse(String(init?.body));
 			expect(body.model).toBe("openai/gpt-oss-20b");
 			expect(body.response_format).toEqual({ type: "json_object" });
+			expect(body.messages[0].content).toContain("JSON object");
 			return Response.json({
 				choices: [{ message: { content: JSON.stringify(result) } }],
 			});

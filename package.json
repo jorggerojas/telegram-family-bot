@@ -41,6 +41,7 @@
 	},
 	"dependencies": {
 		"grammy": "^1.46.0",
+		"groq-sdk": "^1.6.0",
 		"zod": "^4.6.5"
 	}
 }
