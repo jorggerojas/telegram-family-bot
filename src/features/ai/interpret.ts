@@ -44,6 +44,8 @@ const interpretationSchema = z.object({
 		.max(5),
 });
 
+const groqSchema = z.toJSONSchema(interpretationSchema);
+
 export type Interpretation = z.infer<typeof interpretationSchema>;
 
 export interface AiInput {
@@ -238,16 +240,30 @@ const interpretWithGroq = async (
 				{ role: "user", content: JSON.stringify(input) },
 			],
 			model: GROQ_MODEL,
-			response_format: { type: "json_object" },
+			response_format: {
+				type: "json_schema",
+				json_schema: {
+					name: "calendar_interpretation",
+					strict: true,
+					schema: groqSchema,
+				},
+			},
 		});
+
 		return chatCompletion.choices[0]?.message.content
 			? parseInterpretation(chatCompletion, "Groq", groqResponseText)
 			: null;
 	} catch (error) {
-		console.error(
-			"Groq request error",
-			error instanceof Error ? error.name : "unknown",
-		);
+		console.error("Groq request error", {
+			type: error instanceof Error ? error.constructor.name : "unknown",
+			status: error instanceof Groq.APIError ? (error.status ?? null) : null,
+			cause:
+				error instanceof Error &&
+				"cause" in error &&
+				error.cause instanceof Error
+					? error.cause.name
+					: null,
+		});
 		return null;
 	}
 };

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { normalizeInterpretation } from "../src/features/ai/normalization";
-import type { Interpretation } from "../src/features/ai/interpret";
+import {
+	interpretMessage,
+	type Interpretation,
+} from "../src/features/ai/interpret";
 
 const draft = (overrides: Partial<Interpretation> = {}): Interpretation => ({
 	intent: "CREATE_EVENT",
@@ -21,6 +24,82 @@ const draft = (overrides: Partial<Interpretation> = {}): Interpretation => ({
 });
 
 describe("deterministic Spanish interpretation normalization", () => {
+	it("requires only actual creation prerequisites despite model missing optional fields", () => {
+		const value = normalizeInterpretation(
+			draft({ missing: ["location", "search", "duration"] }),
+			"dentista sábado 10 de octubre a las 18",
+			"Alex",
+			new Date("2026-10-10T01:32:00.000Z"),
+		);
+		expect(value).toMatchObject({
+			title: "Cita con dentista de Alex",
+			day: 10,
+			month: 10,
+			year: 2026,
+			hour: 18,
+			minute: 0,
+			missing: [],
+		});
+	});
+
+	it("requests Groq output matching the required interpretation schema", async () => {
+		let requestBody: Record<string, unknown> | undefined;
+		const result = await interpretMessage(
+			{
+				message: "dentista sábado",
+				sender: "Alex",
+				nowMadrid: "2026-10-09T14:00:00+02:00",
+				previousDraft: null,
+			},
+			{
+				groqApiKey: "test-key",
+				geminiApiKey: "unused",
+				geminiModel: "unused",
+			},
+			async (_input, init) => {
+				requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+				return Response.json({
+					id: "completion",
+					object: "chat.completion",
+					created: 0,
+					model: "openai/gpt-oss-20b",
+					choices: [
+						{
+							index: 0,
+							finish_reason: "stop",
+							message: {
+								role: "assistant",
+								content: JSON.stringify(draft()),
+							},
+						},
+					],
+				});
+			},
+		);
+
+		expect(result).toEqual(draft());
+		expect(requestBody?.response_format).toMatchObject({
+			type: "json_schema",
+			json_schema: {
+				name: "calendar_interpretation",
+				strict: true,
+				schema: {
+					type: "object",
+					required: expect.arrayContaining([
+						"intent",
+						"location",
+						"search",
+						"duration_minutes",
+						"all_day",
+						"missing",
+						"fields",
+					]),
+					additionalProperties: false,
+				},
+			},
+		});
+	});
+
 	it.each([
 		[
 			"dentista sábado 10 de octubre a las 18",

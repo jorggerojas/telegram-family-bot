@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { configurationDiagnostics, readConfig } from "../src/config/config";
 import { decryptSecret, encryptSecret } from "../src/features/auth/crypto";
 import { interpretMessage } from "../src/features/ai/interpret";
@@ -155,7 +155,10 @@ describe("private integration boundaries", () => {
 			);
 			const body = JSON.parse(String(init?.body));
 			expect(body.model).toBe("openai/gpt-oss-20b");
-			expect(body.response_format).toEqual({ type: "json_object" });
+			expect(body.response_format).toMatchObject({
+				type: "json_schema",
+				json_schema: { strict: true },
+			});
 			expect(body.messages[0].content).toContain("JSON object");
 			return Response.json({
 				choices: [{ message: { content: JSON.stringify(result) } }],
@@ -194,6 +197,36 @@ describe("private integration boundaries", () => {
 		expect(calls).toHaveLength(2);
 		expect(calls[0]).toContain("api.groq.com/openai/v1/chat/completions");
 		expect(calls[1]).toContain("generativelanguage.googleapis.com");
+	});
+
+	it("logs Groq HTTP status without exposing provider error contents", async () => {
+		const logger = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await interpretMessage(
+				{
+					message: "private message",
+					sender: "Sam",
+					nowMadrid: "10/10/26, 03:24",
+					previousDraft: null,
+				},
+				{ ...aiProviders, groqApiKey: "private-key" },
+				async (url) =>
+					String(url).includes("api.groq.com")
+						? Response.json(
+								{ error: { message: "private-key private message" } },
+								{ status: 401 },
+							)
+						: new Response("unavailable", { status: 503 }),
+			);
+			expect(logger).toHaveBeenCalledWith("Groq request error", {
+				type: "AuthenticationError",
+				status: 401,
+				cause: null,
+			});
+			expect(JSON.stringify(logger.mock.calls)).not.toContain("private");
+		} finally {
+			logger.mockRestore();
+		}
 	});
 
 	it("rejects incomplete, refusal, and schema-invalid structured output", async () => {

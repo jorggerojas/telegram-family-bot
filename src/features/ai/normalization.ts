@@ -299,13 +299,11 @@ export const normalizeInterpretation = (
 	};
 	const missing = new Set(value.missing);
 	if (value.intent === "CREATE_EVENT") {
-		if (value.title) missing.delete("title");
-		else missing.add("title");
+		missing.clear();
+		if (!value.title) missing.add("title");
 		if (value.day === null || explicit.ambiguousDate) missing.add("date");
-		else missing.delete("date");
 		if (!value.all_day && (value.hour === null || explicit.ambiguousTime))
 			missing.add("time");
-		else missing.delete("time");
 	}
 	return { ...value, missing: [...missing] };
 };

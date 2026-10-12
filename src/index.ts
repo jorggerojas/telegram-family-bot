@@ -8,7 +8,7 @@ import { Repository } from "./shared/database";
 
 const updateSchema = z
 	.object({ update_id: z.number().int().nonnegative() })
-	.passthrough();
+	.loose();
 const MAX_WEBHOOK_BYTES = 512_000;
 
 const parseUpdate = async (
@@ -54,23 +54,54 @@ export default {
 		if (!update) return new Response("Bad request", { status: 400 });
 		const claimed = await repository.claimUpdate(update.update_id, Date.now());
 		if (claimed.status === "completed") return new Response("OK");
-		if (claimed.status === "retry")
+		if (claimed.status === "retry") {
+			console.warn("Telegram update awaiting processing", {
+				updateId: update.update_id,
+			});
 			return new Response("Retry", { status: 503 });
+		}
+		let stage = "bot.init";
 		try {
 			const bot = createBot(config, repository, calendar);
 			await bot.init();
+			stage = "bot.handleUpdate";
 			await bot.handleUpdate(update as Update);
+			stage = "completeUpdate";
 			if (
 				!(await repository.completeUpdate(
 					update.update_id,
 					claimed.fenceToken,
 					Date.now(),
 				))
-			)
+			) {
+				console.warn("Telegram update completion lost its lease", {
+					updateId: update.update_id,
+				});
 				return new Response("Retry", { status: 503 });
+			}
+			stage = "cleanup";
 			await repository.cleanup(Date.now());
 			return new Response("OK");
-		} catch {
+		} catch (error) {
+			const cause =
+				error instanceof Error &&
+				"error" in error &&
+				typeof error.error === "object" &&
+				error.error !== null
+					? error.error
+					: null;
+			console.error("Telegram update processing failed", {
+				updateId: update.update_id,
+				stage,
+				type: error instanceof Error ? error.constructor.name : "unknown",
+				cause: cause instanceof Error ? cause.constructor.name : null,
+				code:
+					cause !== null &&
+					"error_code" in cause &&
+					typeof cause.error_code === "number"
+						? cause.error_code
+						: null,
+			});
 			return new Response("Retry", { status: 503 });
 		}
 	},
