@@ -2,10 +2,11 @@ import { Bot, InlineKeyboard } from "grammy";
 import type { AppConfig, FamilyMember } from "../../config/config";
 import { interpretMessage, type Interpretation } from "../ai/interpret";
 import { normalizeInterpretation } from "../ai/normalization";
-import type {
-	CalendarEvent,
-	CalendarMutation,
-	GoogleCalendar,
+import {
+	DEFAULT_EVENT_REMINDERS,
+	type CalendarEvent,
+	type CalendarMutation,
+	type GoogleCalendar,
 } from "../calendar/google-calendar";
 import {
 	addMadridDays,
@@ -88,11 +89,25 @@ const eventLabel = (event: CalendarEvent): string => {
 const missingQuestion = (value: Interpretation): string =>
 	value.missing.includes("time")
 		? "¿A qué hora?"
-		: value.missing.includes("date")
-			? "¿Qué día?"
-			: value.missing.includes("title")
-				? "¿Qué evento quieres guardar?"
-				: "Necesito un poco más de información.";
+		: value.missing.includes("month")
+			? "¿De qué mes?"
+			: value.missing.includes("date")
+				? "¿Qué día?"
+				: value.missing.includes("title")
+					? "¿Qué evento quieres guardar?"
+					: "Necesito un poco más de información.";
+
+const REMINDER_LABEL = "Avisos: 10 min, 1 h, 2 h y 1 día antes.";
+
+const isPronounRevision = (message: string): boolean =>
+	/\b(mu[eé]ve(?:lo|la)|c[aá]mbia(?:lo|la)|p[aá]sa(?:lo|la)|mover(?:lo|la)?)\b/i.test(
+		message,
+	);
+
+const withDefaultReminders = (event: CalendarMutation): CalendarMutation => ({
+	...event,
+	reminders: event.reminders ?? DEFAULT_EVENT_REMINDERS,
+});
 
 const mutationFor = (
 	value: Interpretation,
@@ -115,12 +130,12 @@ const mutationFor = (
 		);
 		if (!result.ok) return { error: result.reason };
 		return {
-			event: {
+			event: withDefaultReminders({
 				summary: title,
 				location: value.location ?? undefined,
 				start: { date: madridDate(result.value.start) },
 				end: { date: nextMadridDate(result.value.start) },
-			},
+			}),
 			label: `${title}, todo el día`,
 		};
 	}
@@ -137,11 +152,15 @@ const mutationFor = (
 		},
 		now,
 	);
-	if (!result.ok) return { error: result.reason };
+	if (!result.ok) {
+		if (result.reason === "El día de la semana no coincide con la fecha.")
+			return { error: "¿Qué día?" };
+		return { error: result.reason };
+	}
 	const minutes = value.duration_minutes ?? duration;
 	const end = new Date(result.value.start.getTime() + minutes * 60_000);
 	return {
-		event: {
+		event: withDefaultReminders({
 			summary: title,
 			location: value.location ?? undefined,
 			start: {
@@ -149,7 +168,7 @@ const mutationFor = (
 				timeZone: "Europe/Madrid",
 			},
 			end: { dateTime: end.toISOString(), timeZone: "Europe/Madrid" },
-		},
+		}),
 		label: `${title}, ${formatMadrid(result.value.start)} (${minutes} min)`,
 	};
 };
@@ -203,12 +222,12 @@ const updateMutationFor = (
 		const end = addMadridDays(start, durationDays);
 		if (!end) return { error: "No gestiono ese evento." };
 		return {
-			event: {
+			event: withDefaultReminders({
 				...target.event,
 				description: old.description,
 				location: value.location ?? old.location,
 				end: { date: end },
-			},
+			}),
 			label: target.label,
 		};
 	}
@@ -241,7 +260,10 @@ const updateMutationFor = (
 	);
 	if ("error" in target) return target;
 	return {
-		event: { ...target.event, description: old.description },
+		event: withDefaultReminders({
+			...target.event,
+			description: old.description,
+		}),
 		label: target.label,
 	};
 };
@@ -361,21 +383,43 @@ export const createBot = (
 			text: string,
 			options?: { reply_markup?: InlineKeyboard },
 		) => Promise<unknown>,
+		existingActionId?: string,
 	): Promise<unknown> => {
-		const start = interval({ id: "new", start: event.start, end: event.end });
+		const prepared = withDefaultReminders(event);
+		const start = interval({
+			id: "new",
+			start: prepared.start,
+			end: prepared.end,
+		});
 		const warnings = start
-			? busyWarnings(await calendar.nearbyBusy(start.start, start.end), event)
+			? busyWarnings(
+					await calendar.nearbyBusy(start.start, start.end),
+					prepared,
+				)
 			: [];
-		const action = await repository.createAction(
+		const now = clock().getTime();
+		const payload = JSON.stringify({ event: prepared });
+		let action = existingActionId;
+		if (action) {
+			const updated = await repository.updatePendingActionPayload(
+				action,
+				ownerId,
+				chatId,
+				payload,
+				now,
+			);
+			if (!updated) action = undefined;
+		}
+		action ??= await repository.createAction(
 			ownerId,
 			chatId,
 			ACTIONS.CREATE,
-			JSON.stringify({ event }),
-			clock().getTime(),
+			payload,
+			now,
 		);
 		const verb = warnings.length ? "Crear igualmente" : "Crear";
 		return reply(
-			`${warnings.join("\n")}${warnings.length ? "\n" : ""}Preparado: ${label}\nNo se guardará hasta confirmarlo.`,
+			`${warnings.join("\n")}${warnings.length ? "\n" : ""}Preparado: ${label}\n${REMINDER_LABEL}\nNo se guardará hasta confirmarlo.`,
 			{
 				reply_markup: new InlineKeyboard()
 					.text(verb, `c:${action}`)
@@ -442,6 +486,7 @@ export const createBot = (
 					old.id,
 				)
 			: [];
+		const prepared = withDefaultReminders(proposed.event);
 		const action = await repository.createAction(
 			ownerId,
 			chatId,
@@ -449,12 +494,12 @@ export const createBot = (
 			JSON.stringify({
 				eventId: old.id,
 				etag: old.etag,
-				event: proposed.event,
+				event: prepared,
 			}),
 			clock().getTime(),
 		);
 		return reply(
-			`${warnings.join("\n")}${warnings.length ? "\n" : ""}Cambiar:\nAntes: ${eventLabel(old)}\nPropuesto: ${eventLabel(proposedEvent)}\nNo se guardará hasta confirmarlo.`,
+			`${warnings.join("\n")}${warnings.length ? "\n" : ""}Cambiar:\nAntes: ${eventLabel(old)}\nPropuesto: ${eventLabel(proposedEvent)}\n${REMINDER_LABEL}\nNo se guardará hasta confirmarlo.`,
 			{
 				reply_markup: new InlineKeyboard()
 					.text(
@@ -537,14 +582,20 @@ export const createBot = (
 			},
 			{
 				groqApiKey: config.groqApiKey,
+				openaiApiKey: config.openaiApiKey,
 				geminiApiKey: config.geminiApiKey,
 				geminiModel: config.geminiModel,
 			},
 		);
-		if (!interpreted)
-			return ctx.reply(
-				"No he podido interpretar eso. Prueba con una cita y fecha concreta.",
+		if (!interpreted) {
+			await repository.saveConversation(
+				ownerId,
+				chatId,
+				draft ? `${draft}\n${ctx.message.text}` : ctx.message.text,
+				now.getTime(),
 			);
+			return ctx.reply("¿Qué día y a qué hora?");
+		}
 		if (interpreted.intent === "UNKNOWN") {
 			await repository.saveConversation(
 				ownerId,
@@ -599,6 +650,77 @@ export const createBot = (
 				);
 			}
 		}
+		const pendingCreate =
+			(value.intent === "UPDATE_EVENT" || value.intent === "CREATE_EVENT") &&
+			(isPronounRevision(ctx.message.text) ||
+				(value.intent === "UPDATE_EVENT" && !value.search && !value.title))
+				? await repository.getLatestPendingAction(
+						ownerId,
+						chatId,
+						[ACTIONS.CREATE],
+						now.getTime(),
+					)
+				: null;
+		if (pendingCreate) {
+			const payload = parsePayload(pendingCreate.payload);
+			const previous = payload?.event;
+			if (previous) {
+				const previousInterval = interval({
+					id: "pending",
+					start: previous.start,
+					end: previous.end,
+				});
+				const local = previousInterval
+					? madridLocalDateTime(previousInterval.start)
+					: null;
+				const revised = mutationFor(
+					{
+						...value,
+						intent: "CREATE_EVENT",
+						title: value.title ?? previous.summary ?? null,
+						location: value.location ?? previous.location ?? null,
+						day: value.day ?? local?.day ?? null,
+						month: value.month ?? local?.month ?? null,
+						year: value.year ?? local?.year ?? null,
+						hour: value.hour ?? local?.hour ?? null,
+						minute: value.minute ?? local?.minute ?? null,
+						all_day: Boolean(previous.start.date) || value.all_day,
+						duration_minutes:
+							value.duration_minutes ??
+							(previousInterval
+								? Math.round(
+										(previousInterval.end.getTime() -
+											previousInterval.start.getTime()) /
+											60_000,
+									)
+								: null),
+					},
+					sender,
+					ctx.message.text,
+					config.defaultDurationMinutes,
+					now,
+				);
+				if ("error" in revised) {
+					await repository.saveConversation(
+						ownerId,
+						chatId,
+						draft ? `${draft}\n${ctx.message.text}` : ctx.message.text,
+						now.getTime(),
+					);
+					return ctx.reply(revised.error);
+				}
+				await repository.cancelConversation(ownerId, chatId);
+				return createPreview(
+					ownerId,
+					chatId,
+					sender,
+					revised.event,
+					revised.label,
+					ctx.reply.bind(ctx),
+					pendingCreate.id,
+				);
+			}
+		}
 		if (value.intent === "CREATE_EVENT") {
 			const prepared = mutationFor(
 				value,
@@ -611,7 +733,7 @@ export const createBot = (
 				await repository.saveConversation(
 					ownerId,
 					chatId,
-					ctx.message.text,
+					draft ? `${draft}\n${ctx.message.text}` : ctx.message.text,
 					now.getTime(),
 				);
 				return ctx.reply(prepared.error);

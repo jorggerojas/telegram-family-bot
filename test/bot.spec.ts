@@ -200,6 +200,44 @@ const setup = (
 			action.status = "done";
 			return true;
 		},
+		getLatestPendingAction: async (
+			owner: string,
+			chat: string,
+			kinds: string[],
+			current: number,
+		) => {
+			const matches = [...actions.values()]
+				.filter(
+					(action) =>
+						action.owner_id === owner &&
+						action.chat_id === chat &&
+						action.status === "pending" &&
+						action.expires_at >= current &&
+						kinds.includes(action.kind),
+				)
+				.sort((left, right) => right.expires_at - left.expires_at);
+			return matches[0] ?? null;
+		},
+		updatePendingActionPayload: async (
+			id: string,
+			owner: string,
+			chat: string,
+			payload: string,
+			current: number,
+		) => {
+			const action = actions.get(id);
+			if (
+				!action ||
+				action.owner_id !== owner ||
+				action.chat_id !== chat ||
+				action.status !== "pending" ||
+				action.expires_at < current
+			)
+				return false;
+			action.payload = payload;
+			action.expires_at = current + 15 * 60_000;
+			return true;
+		},
 	} as unknown as Repository;
 	let inserts = 0;
 	let insertedEventId = "";
@@ -758,6 +796,98 @@ describe("Telegram confirmation workflow", () => {
 			await bot.handleUpdate(callbackUpdate(2, `c:${id}`));
 			expect(test.actions.get(id)?.status).toBe("done");
 			expect(remoteMutations).toBe(1);
+		} finally {
+			test.restore();
+		}
+	});
+
+	it("revises a pending overlapping create with muévelo instead of searching calendar", async () => {
+		const overlapping = {
+			...event,
+			id: "ortodoncia",
+			summary: "Ortodoncia jorge",
+			start: { dateTime: "2026-10-21T17:00:00.000Z" },
+			end: { dateTime: "2026-10-21T18:00:00.000Z" },
+		};
+		const test = setup(
+			[
+				interpretation({
+					title: "test",
+					day: 21,
+					month: 10,
+					year: 2026,
+					weekday: "martes",
+					hour: 19,
+					minute: 0,
+				}),
+				interpretation({
+					intent: "UPDATE_EVENT",
+					title: null,
+					search: null,
+					day: 22,
+					month: 10,
+					year: 2026,
+					weekday: null,
+					hour: null,
+					minute: null,
+					fields: ["date"],
+				}),
+			],
+			[overlapping],
+			new Date("2026-10-12T18:00:00.000Z"),
+		);
+		test.calendar.nearbyBusy = async () => [overlapping];
+		let listed = 0;
+		test.calendar.list = async () => {
+			listed += 1;
+			return [overlapping];
+		};
+		try {
+			const bot = test.create();
+			await bot.init();
+			await bot.handleUpdate(messageUpdate(1, "test para el 21 a las 19"));
+			expect(test.sent.join("\n")).toContain("Se solapa con Ortodoncia jorge");
+			expect(test.sent.join("\n")).toContain(
+				"Avisos: 10 min, 1 h, 2 h y 1 día antes.",
+			);
+			const createId = [...test.actions.keys()][0];
+			expect(createId).toBeDefined();
+			await bot.handleUpdate(messageUpdate(2, "muévelo para el 22"));
+			expect(listed).toBe(0);
+			expect(test.sent.join("\n")).not.toContain(
+				"He encontrado varios eventos",
+			);
+			expect(test.sent.join("\n")).toContain("22/10/26, 19:00");
+			const revised = test.actions.get(createId as string);
+			expect(revised?.kind).toBe("create");
+			expect(revised?.status).toBe("pending");
+			expect(revised?.payload).toContain("2026-10-22T17:00:00.000Z");
+			expect(revised?.payload).toContain('"minutes":10');
+			expect(revised?.payload).toContain('"minutes":1440');
+		} finally {
+			test.restore();
+		}
+	});
+
+	it("asks for month when a bare past day lacks a month", async () => {
+		const test = setup(
+			interpretation({
+				title: "Cita",
+				day: 10,
+				month: null,
+				year: null,
+				hour: 19,
+				minute: 0,
+			}),
+			[event],
+			new Date("2026-10-12T18:00:00.000Z"),
+		);
+		try {
+			const bot = test.create();
+			await bot.init();
+			await bot.handleUpdate(messageUpdate(1, "cita para el 10 a las 19"));
+			expect(test.sent.join("\n")).toContain("¿De qué mes?");
+			expect(test.actions.size).toBe(0);
 		} finally {
 			test.restore();
 		}

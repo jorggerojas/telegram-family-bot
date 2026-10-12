@@ -146,6 +146,38 @@ export class Repository {
 			.first<PendingActionRow>();
 	}
 
+	async getLatestPendingAction(
+		ownerId: string,
+		chatId: string,
+		kinds: string[],
+		now: number,
+	): Promise<PendingActionRow | null> {
+		if (!kinds.length) return null;
+		const placeholders = kinds.map(() => "?").join(", ");
+		return this.db
+			.prepare(
+				`SELECT id, owner_id, chat_id, kind, payload, status, event_id, expires_at, COALESCE(fence_token, '') AS fence_token FROM pending_actions WHERE owner_id = ? AND chat_id = ? AND status = 'pending' AND expires_at >= ? AND kind IN (${placeholders}) ORDER BY created_at DESC LIMIT 1`,
+			)
+			.bind(ownerId, chatId, now, ...kinds)
+			.first<PendingActionRow>();
+	}
+
+	async updatePendingActionPayload(
+		id: string,
+		ownerId: string,
+		chatId: string,
+		payload: string,
+		now: number,
+	): Promise<boolean> {
+		const result = await this.db
+			.prepare(
+				"UPDATE pending_actions SET payload = ?, expires_at = ?, updated_at = ? WHERE id = ? AND owner_id = ? AND chat_id = ? AND status = 'pending' AND expires_at >= ?",
+			)
+			.bind(payload, now + 15 * 60_000, now, id, ownerId, chatId, now)
+			.run();
+		return (result.meta.changes ?? 0) === 1;
+	}
+
 	async claimAction(
 		id: string,
 		ownerId: string,

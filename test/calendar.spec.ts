@@ -184,6 +184,53 @@ describe("Google Calendar adapter", () => {
 		expect(patchBody).toContain("family_action_id");
 	});
 
+	it("sends the four default popup reminders on create and patch", async () => {
+		let insertBody = "";
+		let patchBody = "";
+		const responses = [
+			Response.json({ access_token: "token", refresh_token: "refresh" }),
+			Response.json({ id: config.calendarId, accessRole: "owner" }),
+			new Response(null, { status: 404 }),
+			Response.json({ ...event, id: "new-event" }),
+			Response.json(event),
+			Response.json({ ...event, summary: "Nuevo" }),
+		];
+		const fetcher: typeof fetch = async (_input, init) => {
+			if (init?.method === "POST" && String(init.body).includes("summary"))
+				insertBody = String(init.body);
+			if (init?.method === "PATCH") patchBody = String(init.body);
+			const response = responses.shift();
+			if (!response) throw new Error("Unexpected request");
+			return response;
+		};
+		const calendar = new GoogleCalendar(config, repository, fetcher);
+		await calendar.exchangeCode("code", Date.now());
+		await calendar.insert(
+			"new-event",
+			{
+				summary: "Dentista",
+				start: event.start,
+				end: event.end,
+			},
+			"action1",
+			{ name: "Alex", telegramId: "100" },
+		);
+		expect(insertBody).toContain('"useDefault":false');
+		expect(insertBody).toContain('"minutes":10');
+		expect(insertBody).toContain('"minutes":60');
+		expect(insertBody).toContain('"minutes":120');
+		expect(insertBody).toContain('"minutes":1440');
+		expect(insertBody).toContain('"method":"popup"');
+		await calendar.patch(
+			event.id,
+			"etag1",
+			{ summary: "Nuevo", start: event.start, end: event.end },
+			"action2",
+		);
+		expect(patchBody).toContain('"minutes":10');
+		expect(patchBody).toContain('"minutes":1440');
+	});
+
 	it("reconciles deterministic create after an uncertain response without a second post", async () => {
 		const calendar = await connectedCalendar([
 			Response.json({ access_token: "token", refresh_token: "refresh" }),

@@ -108,6 +108,59 @@ describe("D1 durable action claims", () => {
 		expect(await repository.getConversation("100", "100", now)).toBeNull();
 	});
 
+	it("loads and updates the latest pending create for the same owner chat", async () => {
+		const repository = new Repository(env.DB);
+		const older = await repository.createAction(
+			"100",
+			"100",
+			"create",
+			'{"event":{"summary":"old"}}',
+			now,
+		);
+		const newer = await repository.createAction(
+			"100",
+			"100",
+			"create",
+			'{"event":{"summary":"new"}}',
+			now + 1,
+		);
+		await repository.createAction(
+			"200",
+			"200",
+			"create",
+			'{"event":{"summary":"other"}}',
+			now + 2,
+		);
+		const latest = await repository.getLatestPendingAction(
+			"100",
+			"100",
+			["create"],
+			now + 3,
+		);
+		expect(latest?.id).toBe(newer);
+		expect(latest?.id).not.toBe(older);
+		expect(
+			await repository.updatePendingActionPayload(
+				newer,
+				"100",
+				"100",
+				'{"event":{"summary":"moved"}}',
+				now + 3,
+			),
+		).toBe(true);
+		const updated = await repository.getAction(newer, "100", "100");
+		expect(updated?.payload).toContain("moved");
+		expect(
+			await repository.updatePendingActionPayload(
+				newer,
+				"100",
+				"100",
+				'{"event":{"summary":"late"}}',
+				now + 15 * 60_000 + 10,
+			),
+		).toBe(false);
+	});
+
 	it("fences duplicate Telegram update completion after lease recovery", async () => {
 		const repository = new Repository(env.DB);
 		const first = await repository.claimUpdate(42, now);

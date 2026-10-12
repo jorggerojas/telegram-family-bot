@@ -16,6 +16,7 @@ export interface AppConfig {
 	googleClientSecret: string;
 	googleTokenEncryptionKey: string;
 	groqApiKey: string | null;
+	openaiApiKey: string | null;
 	geminiApiKey: string;
 	geminiModel: string;
 	oauthSetupAdminToken: string;
@@ -52,6 +53,10 @@ const configSchema = z.object({
 	GEMINI_API_KEY: z.string().min(1),
 	GEMINI_MODEL: z.string().min(1).default("gemini-2.5-flash-lite"),
 	GROQ_API_KEY: z
+		.string()
+		.optional()
+		.transform((value) => value?.trim() || undefined),
+	OPENAI_API_KEY: z
 		.string()
 		.optional()
 		.transform((value) => value?.trim() || undefined),
@@ -113,6 +118,7 @@ export const readConfig = (env: Record<string, unknown>): AppConfig => {
 		googleClientSecret: values.GOOGLE_CLIENT_SECRET,
 		googleTokenEncryptionKey: values.GOOGLE_TOKEN_ENCRYPTION_KEY,
 		groqApiKey: values.GROQ_API_KEY ?? null,
+		openaiApiKey: values.OPENAI_API_KEY ?? null,
 		geminiApiKey: values.GEMINI_API_KEY,
 		geminiModel: values.GEMINI_MODEL,
 		oauthSetupAdminToken: values.OAUTH_SETUP_ADMIN_TOKEN,

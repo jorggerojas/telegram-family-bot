@@ -43,14 +43,17 @@ source `.dev.vars` in a shell.
 
 ### Configuration reference
 
-Set every name below. Defaults apply only where shown; all other values are
-required. `WORKER_BASE_URL` must be a valid absolute URL.
+Set every name below. Defaults apply only where shown. Names marked optional
+may be omitted; every other value is required. `WORKER_BASE_URL` must be a
+valid absolute URL.
 
 | Name | Kind | Default or required value |
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | secret | Telegram bot token |
 | `TELEGRAM_WEBHOOK_SECRET` | secret | at least 16 random characters |
-| `GEMINI_API_KEY` | secret | Gemini API key |
+| `GEMINI_API_KEY` | secret | Gemini API key; last interpretation fallback |
+| `GROQ_API_KEY` | secret, optional | Groq key; tried first when present |
+| `OPENAI_API_KEY` | secret, optional | NVIDIA key for the OpenAI SDK (`https://integrate.api.nvidia.com/v1`, model `meta/muse-glimmer-30b`); tried after Groq |
 | `GOOGLE_CLIENT_ID` | secret | Google OAuth web-client ID |
 | `GOOGLE_CLIENT_SECRET` | secret | Google OAuth web-client secret |
 | `GOOGLE_TOKEN_ENCRYPTION_KEY` | secret | base64 encoding of exactly 32 bytes |
@@ -84,7 +87,12 @@ pnpm exec wrangler secret put GOOGLE_CLIENT_ID
 pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET
 pnpm exec wrangler secret put OAUTH_SETUP_ADMIN_TOKEN
 pnpm exec wrangler secret put ALLOWED_TELEGRAM_USERS_JSON
+pnpm exec wrangler secret put GROQ_API_KEY
+pnpm exec wrangler secret put OPENAI_API_KEY
 ```
+
+`GROQ_API_KEY` and `OPENAI_API_KEY` are optional. Set them when Groq and NVIDIA
+should run before Gemini. `OPENAI_API_KEY` must be an NVIDIA API key.
 
 `ALLOWED_TELEGRAM_USERS_JSON` must have this shape, replacing examples with
 real sender IDs:
@@ -181,8 +189,14 @@ https://www.googleapis.com/auth/calendar.calendarlist.readonly
 
 Start it with an administrator bearer token in a header, never in a URL. The
 endpoint returns a `302` redirect whose `Location` is the Google authorization
-URL. This command prints that URL, but not its bearer token; open it in a
-browser to complete Google's flow.
+URL. Prefer the local script; it reads `OAUTH_SETUP_ADMIN_TOKEN` and
+`WORKER_BASE_URL` from ignored `.dev.vars` and prints only the Google URL.
+
+```sh
+pnpm oauth:start
+```
+
+Equivalent manual form if you prefer not to use the script:
 
 ```sh
 read -rs 'OAUTH_SETUP_ADMIN_TOKEN?Admin token: '; printf '\n'
@@ -287,6 +301,11 @@ the selected calendar is `Familia`. Exercise read, create after confirmation,
 update after confirmation, and delete only that same test event after
 confirmation. Never bulk-delete, modify, or smoke-test real family entries. The
 application has no automatic production smoke test.
+
+Message interpretation tries Groq first, then NVIDIA through the OpenAI SDK
+(`meta/muse-glimmer-30b` at `https://integrate.api.nvidia.com/v1`), then Gemini.
+A blank or missing `GROQ_API_KEY` or `OPENAI_API_KEY` skips that provider.
+`OPENAI_API_KEY` is an NVIDIA API key, not an OpenAI platform key.
 
 `GEMINI_MODEL` defaults to `gemini-2.5-flash-lite` and remains configurable. The
 implementation uses Gemini structured JSON output, not tool calls. Choose a

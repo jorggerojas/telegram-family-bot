@@ -43,12 +43,24 @@ const tokenSchema = z.object({
 });
 
 export type CalendarEvent = z.infer<typeof calendarEventSchema>;
+
+const REMINDER_MINUTES = [10, 60, 120, 1440] as const;
+
+export const DEFAULT_EVENT_REMINDERS = {
+	useDefault: false,
+	overrides: REMINDER_MINUTES.map((minutes) => ({
+		method: "popup" as const,
+		minutes,
+	})),
+};
+
 export interface CalendarMutation {
 	summary: string;
 	description?: string;
 	location?: string;
 	start: CalendarEvent["start"];
 	end: CalendarEvent["end"];
+	reminders?: typeof DEFAULT_EVENT_REMINDERS;
 }
 
 const sameMutation = (
@@ -63,6 +75,11 @@ const sameMutation = (
 	(mutation.description === undefined ||
 		event.description === mutation.description) &&
 	(mutation.location === undefined || event.location === mutation.location);
+
+const withReminders = (event: CalendarMutation): CalendarMutation => ({
+	...event,
+	reminders: event.reminders ?? DEFAULT_EVENT_REMINDERS,
+});
 
 interface TokenCache {
 	accessToken: string;
@@ -266,10 +283,11 @@ export class GoogleCalendar {
 		actionId: string,
 		creator: { name: string; telegramId: string },
 	): Promise<CalendarEvent> {
+		const mutation = withReminders(event);
 		const existing = await this.get(eventId);
 		if (
 			existing?.extendedProperties?.private?.family_action_id === actionId &&
-			sameMutation(existing, event)
+			sameMutation(existing, mutation)
 		)
 			return existing;
 		if (existing)
@@ -277,7 +295,7 @@ export class GoogleCalendar {
 		const response = await this.request(`/events?sendUpdates=none`, {
 			method: "POST",
 			body: JSON.stringify({
-				...event,
+				...mutation,
 				id: eventId,
 				extendedProperties: {
 					private: {
@@ -289,7 +307,7 @@ export class GoogleCalendar {
 			}),
 		});
 		if (response.status === 409)
-			return this.insert(eventId, event, actionId, creator);
+			return this.insert(eventId, mutation, actionId, creator);
 		if (!response.ok)
 			throw new Error("Google Calendar could not save the event.");
 		return calendarEventSchema.parse(await response.json());
@@ -301,13 +319,14 @@ export class GoogleCalendar {
 		event: CalendarMutation,
 		actionId: string,
 	): Promise<CalendarEvent> {
+		const mutation = withReminders(event);
 		const existing = await this.get(eventId);
 		if (!existing) throw new Error("El evento ya no existe.");
 		if (existing.recurrence?.length)
 			throw new Error("No gestiono eventos recurrentes.");
 		if (
 			existing.extendedProperties?.private?.family_action_id === actionId &&
-			sameMutation(existing, event)
+			sameMutation(existing, mutation)
 		)
 			return existing;
 		if (existing.etag !== etag)
@@ -318,9 +337,9 @@ export class GoogleCalendar {
 				method: "PATCH",
 				headers: { "If-Match": etag },
 				body: JSON.stringify({
-					...event,
-					description: event.description ?? existing.description,
-					location: event.location ?? existing.location,
+					...mutation,
+					description: mutation.description ?? existing.description,
+					location: mutation.location ?? existing.location,
 					extendedProperties: {
 						private: {
 							...existing.extendedProperties?.private,

@@ -17,6 +17,7 @@ const baseConfig = {
 };
 const aiProviders = {
 	groqApiKey: null,
+	openaiApiKey: null,
 	geminiApiKey: "key",
 	geminiModel: "model",
 };
@@ -27,6 +28,12 @@ describe("private integration boundaries", () => {
 		expect(
 			readConfig({ ...baseConfig, GROQ_API_KEY: "" }).groqApiKey,
 		).toBeNull();
+		expect(
+			readConfig({ ...baseConfig, OPENAI_API_KEY: "  " }).openaiApiKey,
+		).toBeNull();
+		expect(
+			readConfig({ ...baseConfig, OPENAI_API_KEY: "nv-key" }).openaiApiKey,
+		).toBe("nv-key");
 		expect(() =>
 			readConfig({
 				...baseConfig,
@@ -197,6 +204,94 @@ describe("private integration boundaries", () => {
 		expect(calls).toHaveLength(2);
 		expect(calls[0]).toContain("api.groq.com/openai/v1/chat/completions");
 		expect(calls[1]).toContain("generativelanguage.googleapis.com");
+	});
+
+	it("uses NVIDIA after Groq and Gemini only after both fail", async () => {
+		const input = {
+			message: "dentista mañana a las 18",
+			sender: "Sam",
+			nowMadrid: "09/10/26, 14:00",
+			previousDraft: null,
+		};
+		const result = {
+			intent: "CREATE_EVENT",
+			title: "Cita con dentista de Sam",
+			location: null,
+			search: null,
+			day: 10,
+			month: 10,
+			year: 2026,
+			weekday: "sabado",
+			hour: 18,
+			minute: 0,
+			duration_minutes: null,
+			all_day: false,
+			missing: [],
+			fields: ["title", "date", "time"],
+		};
+		const calls: string[] = [];
+		const fetcher: typeof fetch = async (input, init) => {
+			const url = String(input);
+			calls.push(url);
+			if (url.includes("api.groq.com"))
+				return new Response("rate limit", { status: 429 });
+			if (url.includes("integrate.api.nvidia.com")) {
+				expect(new Headers(init?.headers).get("authorization")).toBe(
+					"Bearer nv-key",
+				);
+				const body = JSON.parse(String(init?.body));
+				expect(body.model).toBe("meta/muse-glimmer-30b");
+				expect(body.temperature).toBe(0.95);
+				expect(body.max_tokens).toBe(8192);
+				expect(body.stream).toBe(false);
+				expect(body.reasoning_effort).toBe("low");
+				expect(body.response_format).toMatchObject({
+					type: "json_schema",
+					json_schema: { name: "calendar_interpretation", strict: true },
+				});
+				return Response.json({
+					choices: [{ message: { content: JSON.stringify(result) } }],
+				});
+			}
+			return new Response("gemini should not run", { status: 500 });
+		};
+		expect(
+			await interpretMessage(
+				input,
+				{ ...aiProviders, groqApiKey: "groq-key", openaiApiKey: "nv-key" },
+				fetcher,
+			),
+		).toMatchObject({ intent: "CREATE_EVENT" });
+		expect(calls).toHaveLength(2);
+		expect(calls[1]).toContain("integrate.api.nvidia.com/v1/chat/completions");
+
+		calls.length = 0;
+		const exhausted: typeof fetch = async (input) => {
+			const url = String(input);
+			calls.push(url);
+			if (url.includes("generativelanguage.googleapis.com")) {
+				return Response.json({
+					candidates: [
+						{
+							finishReason: "STOP",
+							content: { parts: [{ text: JSON.stringify(result) }] },
+						},
+					],
+				});
+			}
+			return new Response("unavailable", { status: 429 });
+		};
+		expect(
+			await interpretMessage(
+				input,
+				{ ...aiProviders, groqApiKey: "groq-key", openaiApiKey: "nv-key" },
+				exhausted,
+			),
+		).toMatchObject({ intent: "CREATE_EVENT" });
+		expect(calls).toHaveLength(3);
+		expect(calls[0]).toContain("api.groq.com");
+		expect(calls[1]).toContain("integrate.api.nvidia.com");
+		expect(calls[2]).toContain("generativelanguage.googleapis.com");
 	});
 
 	it("logs Groq HTTP status without exposing provider error contents", async () => {

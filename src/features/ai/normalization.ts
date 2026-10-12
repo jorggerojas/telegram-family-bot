@@ -61,6 +61,9 @@ type Extracted = Partial<
 > & {
 	ambiguousTime?: boolean;
 	ambiguousDate?: boolean;
+	needsMonth?: boolean;
+	weekdayMentioned?: boolean;
+	dateMentioned?: boolean;
 };
 
 const text = (value: string): string =>
@@ -84,8 +87,22 @@ const addDays = (
 const weekdayFor = (year: number, month: number, day: number): number =>
 	new Date(Date.UTC(year, month - 1, day)).getUTCDay();
 
+const validCalendarDay = (
+	year: number,
+	month: number,
+	day: number,
+): boolean => {
+	const value = new Date(Date.UTC(year, month - 1, day));
+	return (
+		value.getUTCFullYear() === year &&
+		value.getUTCMonth() === month - 1 &&
+		value.getUTCDate() === day
+	);
+};
+
 const relativeDate = (value: string, now: Date): Extracted => {
 	const [year, month, day] = dateParts(now);
+	if (/\bhoy\b/.test(value)) return { year, month, day };
 	if (/\bpasado mañana\b/.test(value)) {
 		const [nextYear, nextMonth, nextDay] = addDays(year, month, day, 2);
 		return { year: nextYear, month: nextMonth, day: nextDay };
@@ -163,6 +180,24 @@ const applyMeridiem = (
 	result.minute ??= 0;
 };
 
+const extractBareDay = (value: string, now: Date): Extracted => {
+	const [year, month, today] = dateParts(now);
+	const thisMonth = value.match(/\b(\d{1,2})\s+de\s+este\s+mes\b/);
+	if (thisMonth) {
+		const day = Number(thisMonth[1]);
+		if (day >= 1 && day <= 31 && validCalendarDay(year, month, day))
+			return { day, month, year };
+	}
+	const bare = value.match(
+		/\b(?:para\s+el|el|día|dia)\s+(\d{1,2})\b(?!\s*(?:[:.]\d{2}|de\s+(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)|de\s+este\s+mes))/,
+	);
+	if (!bare) return {};
+	const day = Number(bare[1]);
+	if (day < 1 || day > 31 || !validCalendarDay(year, month, day)) return {};
+	if (day < today) return { day, needsMonth: true, ambiguousDate: true };
+	return { day, month, year };
+};
+
 const extract = (
 	message: string,
 	sender: FamilyMember,
@@ -178,10 +213,17 @@ const extract = (
 		result.month = MONTHS[namedDay[2] as keyof typeof MONTHS];
 		result.year = namedDay[3] ? Number(namedDay[3]) : dateParts(now)[0];
 	}
+	if (result.day === undefined) {
+		const bare = extractBareDay(value, now);
+		Object.assign(result, bare);
+	}
 	const weekday = value.match(
 		/\b(domingo|lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado)\b/,
 	)?.[1] as ExplicitWeekday | undefined;
-	if (weekday) result.weekday = weekday;
+	if (weekday) {
+		result.weekday = weekday;
+		result.weekdayMentioned = true;
+	}
 	const weekdayNumber = value.match(
 		/\b(?:domingo|lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado)\s+(\d{1,2})\b/,
 	);
@@ -199,8 +241,22 @@ const extract = (
 		result.day = nextDay;
 		result.weekday = undefined;
 	}
+	if (
+		weekday &&
+		typeof result.day === "number" &&
+		typeof result.month === "number" &&
+		typeof result.year === "number" &&
+		!result.ambiguousDate &&
+		!result.needsMonth
+	) {
+		const actual = weekdayFor(result.year, result.month, result.day);
+		if (actual !== WEEKDAYS[weekday]) {
+			result.ambiguousDate = true;
+			result.weekday = undefined;
+		}
+	}
 	const numericTime = value.match(
-		/\ba\s*las\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|a\.m\.|pm|p\.m\.|de la mañana|de la tarde|de la noche)?\b/,
+		/\b(?:para|a)\s*las\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|a\.m\.|pm|p\.m\.|de la mañana|de la tarde|de la noche)?\b/,
 	);
 	if (numericTime) {
 		applyMeridiem(
@@ -233,7 +289,7 @@ const extract = (
 		);
 	}
 	if (
-		/\ba las (una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\b/.test(
+		/\b(?:para|a) las (una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)\b/.test(
 			value,
 		) &&
 		!/\bde la (?:mañana|tarde|noche)\b/.test(value)
@@ -261,6 +317,16 @@ const extract = (
 			: amount;
 	}
 	result.title = explicitTitle(value, sender);
+	if (
+		result.day !== undefined ||
+		result.month !== undefined ||
+		result.year !== undefined ||
+		result.weekdayMentioned ||
+		result.needsMonth ||
+		result.ambiguousDate ||
+		/\bal\s+\d{1,2}\b/.test(value)
+	)
+		result.dateMentioned = true;
 	return result;
 };
 
@@ -270,6 +336,36 @@ const merge = (value: Extracted, target: Extracted): Extracted => ({
 		Object.entries(target).filter(([, component]) => component !== undefined),
 	),
 });
+
+const applyCreateDefaults = (
+	value: Interpretation,
+	now: Date,
+	needsMonth: boolean,
+): Interpretation => {
+	if (value.intent !== "CREATE_EVENT" || value.all_day) return value;
+	const current = madridLocalDateTime(now);
+	let day = value.day;
+	let month = value.month;
+	let year = value.year;
+	if (needsMonth) return value;
+	if (day !== null && month === null) {
+		month = current.month;
+		year ??= current.year;
+	}
+	if (day === null && value.hour !== null) {
+		const minute = value.minute ?? 0;
+		const passed =
+			value.hour < current.hour ||
+			(value.hour === current.hour && minute <= current.minute);
+		const [nextYear, nextMonth, nextDay] = passed
+			? addDays(current.year, current.month, current.day, 1)
+			: [current.year, current.month, current.day];
+		day = nextDay;
+		month = nextMonth;
+		year = nextYear;
+	}
+	return { ...value, day, month, year };
+};
 
 export const normalizeInterpretation = (
 	model: Interpretation,
@@ -284,24 +380,37 @@ export const normalizeInterpretation = (
 		current,
 	);
 	if (current.hour !== undefined) explicit.ambiguousTime = false;
-	if (current.day !== undefined && !current.ambiguousDate)
+	const timeOnly =
+		explicit.hour !== undefined && explicit.dateMentioned !== true;
+	if (
+		current.day !== undefined &&
+		!current.ambiguousDate &&
+		!current.needsMonth
+	)
 		explicit.ambiguousDate = false;
-	const value: Interpretation = {
-		...model,
-		day: explicit.day ?? model.day,
-		month: explicit.month ?? model.month,
-		year: explicit.year ?? model.year,
-		weekday: explicit.weekday ?? model.weekday,
-		hour: explicit.ambiguousTime ? null : (explicit.hour ?? model.hour),
-		minute: explicit.ambiguousTime ? null : (explicit.minute ?? model.minute),
-		duration_minutes: explicit.duration_minutes ?? model.duration_minutes,
-		title: explicit.title ?? model.title,
-	};
+	const weekday = explicit.weekdayMentioned ? (explicit.weekday ?? null) : null;
+	const value: Interpretation = applyCreateDefaults(
+		{
+			...model,
+			day: timeOnly ? null : (explicit.day ?? model.day),
+			month: timeOnly ? null : (explicit.month ?? model.month),
+			year: timeOnly ? null : (explicit.year ?? model.year),
+			all_day: explicit.hour !== undefined ? false : model.all_day,
+			weekday,
+			hour: explicit.ambiguousTime ? null : (explicit.hour ?? model.hour),
+			minute: explicit.ambiguousTime ? null : (explicit.minute ?? model.minute),
+			duration_minutes: explicit.duration_minutes ?? model.duration_minutes,
+			title: explicit.title ?? model.title,
+		},
+		now,
+		Boolean(explicit.needsMonth),
+	);
 	const missing = new Set(value.missing);
 	if (value.intent === "CREATE_EVENT") {
 		missing.clear();
 		if (!value.title) missing.add("title");
-		if (value.day === null || explicit.ambiguousDate) missing.add("date");
+		if (explicit.needsMonth) missing.add("month");
+		else if (value.day === null || explicit.ambiguousDate) missing.add("date");
 		if (!value.all_day && (value.hour === null || explicit.ambiguousTime))
 			missing.add("time");
 	}

@@ -53,6 +53,7 @@ describe("deterministic Spanish interpretation normalization", () => {
 			},
 			{
 				groqApiKey: "test-key",
+				openaiApiKey: null,
 				geminiApiKey: "unused",
 				geminiModel: "unused",
 			},
@@ -233,6 +234,7 @@ describe("deterministic Spanish interpretation normalization", () => {
 		["este sábado", 10, 10],
 		["dentro de dos semanas", 23, 10],
 		["el último viernes del mes", 30, 10],
+		["hoy", 9, 10],
 	])("anchors relative date %s in Madrid", (message, day, month) => {
 		const value = normalizeInterpretation(
 			draft(),
@@ -241,5 +243,174 @@ describe("deterministic Spanish interpretation normalization", () => {
 			new Date("2026-10-09T12:00:00.000Z"),
 		);
 		expect(value).toMatchObject({ day, month, year: 2026 });
+	});
+
+	it("drops model-only weekday when the user gives a numeric day and hour", () => {
+		const value = normalizeInterpretation(
+			draft({
+				day: 22,
+				month: 10,
+				year: 2026,
+				weekday: "viernes",
+				hour: 19,
+				minute: 0,
+			}),
+			"test para el 22 a las 19",
+			"Alex",
+			new Date("2026-10-12T18:00:00.000Z"),
+		);
+		expect(value).toMatchObject({
+			day: 22,
+			month: 10,
+			year: 2026,
+			hour: 19,
+			weekday: null,
+			missing: [],
+		});
+	});
+
+	it("parses hoy and este mes without trusting a mismatched weekday", () => {
+		const today = normalizeInterpretation(
+			draft({ day: 12, month: 10, year: 2026, weekday: "martes", hour: 23 }),
+			"crear dormir para hoy a las 23",
+			"Alex",
+			new Date("2026-10-12T18:00:00.000Z"),
+		);
+		expect(today).toMatchObject({
+			day: 12,
+			month: 10,
+			year: 2026,
+			hour: 23,
+			weekday: null,
+			missing: [],
+		});
+		const thisMonth = normalizeInterpretation(
+			draft({ weekday: "lunes", hour: 19 }),
+			"prueba maquillaje para el 22 de este mes a las 19",
+			"Alex",
+			new Date("2026-10-12T18:00:00.000Z"),
+		);
+		expect(thisMonth).toMatchObject({
+			day: 22,
+			month: 10,
+			year: 2026,
+			hour: 19,
+			weekday: null,
+			missing: [],
+		});
+	});
+
+	it("asks for the month when a bare day has already passed this month", () => {
+		const value = normalizeInterpretation(
+			draft({ hour: 19, minute: 0 }),
+			"cita para el 10 a las 19",
+			"Alex",
+			new Date("2026-10-12T18:00:00.000Z"),
+		);
+		expect(value.missing).toContain("month");
+		expect(value.month).toBeNull();
+	});
+
+	it("treats para las as a clock time and drops an invented date", () => {
+		const now = new Date("2026-10-12T18:51:00.000Z");
+		const stillToday = normalizeInterpretation(
+			draft({
+				title: "dormir",
+				day: 26,
+				month: 10,
+				year: 2026,
+				hour: 23,
+				minute: 0,
+			}),
+			"dormir para las 23",
+			"Alex",
+			now,
+		);
+		expect(stillToday).toMatchObject({
+			title: "dormir",
+			day: 12,
+			month: 10,
+			year: 2026,
+			hour: 23,
+			minute: 0,
+			weekday: null,
+			missing: [],
+		});
+		const tomorrow = normalizeInterpretation(
+			draft({
+				title: "dormir",
+				day: 26,
+				month: 10,
+				year: 2026,
+				hour: 8,
+				minute: 0,
+			}),
+			"dormir para las 8",
+			"Alex",
+			now,
+		);
+		expect(tomorrow).toMatchObject({
+			day: 13,
+			month: 10,
+			year: 2026,
+			hour: 8,
+			minute: 0,
+			missing: [],
+		});
+		const drafted = normalizeInterpretation(
+			draft({ title: "dormir", day: 26, month: 10, year: 2026, hour: 10 }),
+			"para las 23",
+			"Alex",
+			now,
+			"dormir el 20 de octubre",
+		);
+		expect(drafted).toMatchObject({
+			day: 20,
+			month: 10,
+			year: 2026,
+			hour: 23,
+			minute: 0,
+			missing: [],
+		});
+	});
+
+	it("defaults a time-only create to today or tomorrow in Madrid", () => {
+		const stillToday = normalizeInterpretation(
+			draft({ day: null, month: null, year: null, hour: 23, minute: 0 }),
+			"dormir a las 23",
+			"Alex",
+			new Date("2026-10-12T18:00:00.000Z"),
+		);
+		expect(stillToday).toMatchObject({
+			day: 12,
+			month: 10,
+			year: 2026,
+			hour: 23,
+			missing: [],
+		});
+		const tomorrow = normalizeInterpretation(
+			draft({ day: null, month: null, year: null, hour: 8, minute: 0 }),
+			"café a las 8",
+			"Alex",
+			new Date("2026-10-12T18:00:00.000Z"),
+		);
+		expect(tomorrow).toMatchObject({
+			day: 13,
+			month: 10,
+			year: 2026,
+			hour: 8,
+			missing: [],
+		});
+	});
+
+	it("asks for the day when an explicit weekday contradicts the numeric date", () => {
+		const value = normalizeInterpretation(
+			draft({ hour: 18, minute: 0 }),
+			"dentista lunes 10 de octubre a las 18",
+			"Alex",
+			new Date("2026-10-09T12:00:00.000Z"),
+		);
+		expect(value.missing).toContain("date");
+		expect(value.weekday).toBeNull();
 	});
 });

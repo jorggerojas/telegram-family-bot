@@ -10,9 +10,14 @@ if (!response.ok)
 const result = await response.json();
 if (!result.ok)
 	throw new Error("Telegram rejected webhook information request.");
+const info = result.result ?? {};
 console.log(
 	JSON.stringify({
-		configured: Boolean(result.result?.url),
-		pendingUpdateCount: result.result?.pending_update_count ?? 0,
+		configured: Boolean(info.url),
+		pendingUpdateCount: info.pending_update_count ?? 0,
+		lastErrorMessage: info.last_error_message ?? null,
+		lastErrorAt: info.last_error_date
+			? new Date(info.last_error_date * 1000).toISOString()
+			: null,
 	}),
 );
