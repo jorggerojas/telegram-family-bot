@@ -1,11 +1,9 @@
 import { z } from "zod";
 
-const PEOPLE = {
-	Alex: "Alex",
-	Sam: "Sam",
-} as const;
+export type FamilyMember = string;
 
-export type FamilyMember = (typeof PEOPLE)[keyof typeof PEOPLE];
+const MAX_MEMBERS = 10;
+const NAME_MAX_LENGTH = 40;
 
 export interface AppConfig {
 	allowedUsers: Map<string, FamilyMember>;
@@ -25,6 +23,15 @@ export interface AppConfig {
 	workerBaseUrl: string;
 }
 
+const isValidTimeZone = (value: string): boolean => {
+	try {
+		Intl.DateTimeFormat("en-US", { timeZone: value });
+		return true;
+	} catch {
+		return false;
+	}
+};
+
 const configSchema = z.object({
 	ALLOWED_TELEGRAM_USERS_JSON: z.string().min(1),
 	DEFAULT_EVENT_DURATION_MINUTES: z.coerce
@@ -36,7 +43,7 @@ const configSchema = z.object({
 	DEFAULT_TIME_ZONE: z
 		.string()
 		.default("Europe/Madrid")
-		.refine((value) => value === "Europe/Madrid"),
+		.refine(isValidTimeZone, { error: "Must be a valid IANA time zone." }),
 	GOOGLE_CALENDAR_ID: z.string().min(1),
 	GOOGLE_CLIENT_ID: z.string().min(1),
 	GOOGLE_CLIENT_SECRET: z.string().min(1),
@@ -66,16 +73,35 @@ const configSchema = z.object({
 	WORKER_BASE_URL: z.url(),
 });
 
+const hasControlCharacters = (value: string): boolean => {
+	for (let index = 0; index < value.length; index += 1) {
+		if (value.charCodeAt(index) < 32) return true;
+	}
+	return false;
+};
+
+const memberNameSchema = z
+	.string()
+	.trim()
+	.min(1)
+	.max(NAME_MAX_LENGTH)
+	.refine((value) => !hasControlCharacters(value), {
+		error: "Member names cannot contain control characters.",
+	});
+
 const parseUsers = (value: string): Record<string, FamilyMember> | null => {
 	try {
 		const parsed: unknown = JSON.parse(value);
 		const users = z
-			.record(z.string().regex(/^\d+$/), z.enum([PEOPLE.Alex, PEOPLE.Sam]))
+			.record(z.string().regex(/^\d+$/), memberNameSchema)
 			.safeParse(parsed);
+		if (!users.success) return null;
+		const entries = Object.entries(users.data);
+		if (entries.length < 1 || entries.length > MAX_MEMBERS) return null;
+		const names = entries.map(([, name]) => name);
 		if (
-			!users.success ||
-			Object.keys(users.data).length !== 2 ||
-			new Set(Object.values(users.data)).size !== 2
+			new Set(names.map((name) => name.toLocaleLowerCase("es-ES"))).size !==
+			names.length
 		)
 			return null;
 		return users.data;
@@ -106,7 +132,7 @@ export const readConfig = (env: Record<string, unknown>): AppConfig => {
 	const users = parseUsers(values.ALLOWED_TELEGRAM_USERS_JSON);
 	if (!users) {
 		throw new Error(
-			"ALLOWED_TELEGRAM_USERS_JSON must map exactly Alex and Sam to numeric IDs.",
+			"ALLOWED_TELEGRAM_USERS_JSON must map 1–10 unique display names to numeric Telegram IDs.",
 		);
 	}
 	return {

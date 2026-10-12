@@ -1,4 +1,3 @@
-const MADRID = "Europe/Madrid";
 const WEEKDAYS = {
 	domingo: 0,
 	lunes: 1,
@@ -48,10 +47,10 @@ type DateResolution =
 	| { ok: true; value: ResolvedDate }
 	| { ok: false; reason: string };
 
-const madridParts = (date: Date): Record<string, string> =>
+const zoneParts = (date: Date, timeZone: string): Record<string, string> =>
 	Object.fromEntries(
 		new Intl.DateTimeFormat("en-GB", {
-			timeZone: MADRID,
+			timeZone,
 			year: "numeric",
 			month: "2-digit",
 			day: "2-digit",
@@ -66,7 +65,7 @@ const madridParts = (date: Date): Record<string, string> =>
 const partNumber = (parts: Record<string, string>, name: string): number =>
 	Number(parts[name]);
 
-interface MadridDateParts {
+interface ZoneDateParts {
 	day: number;
 	month: number;
 	year: number;
@@ -74,8 +73,8 @@ interface MadridDateParts {
 	minute: number;
 }
 
-const currentParts = (now: Date): MadridDateParts => {
-	const parts = madridParts(now);
+const currentParts = (now: Date, timeZone: string): ZoneDateParts => {
+	const parts = zoneParts(now, timeZone);
 	return {
 		day: partNumber(parts, "day"),
 		month: partNumber(parts, "month"),
@@ -85,8 +84,12 @@ const currentParts = (now: Date): MadridDateParts => {
 	};
 };
 
-const sameWallTime = (date: Date, target: Required<LocalDateTime>): boolean => {
-	const parts = madridParts(date);
+const sameWallTime = (
+	date: Date,
+	target: Required<LocalDateTime>,
+	timeZone: string,
+): boolean => {
+	const parts = zoneParts(date, timeZone);
 	return (
 		partNumber(parts, "day") === target.day &&
 		partNumber(parts, "month") === target.month &&
@@ -96,7 +99,10 @@ const sameWallTime = (date: Date, target: Required<LocalDateTime>): boolean => {
 	);
 };
 
-const dateInMadrid = (target: Required<LocalDateTime>): Date[] => {
+const dateInZone = (
+	target: Required<LocalDateTime>,
+	timeZone: string,
+): Date[] => {
 	const intendedUtc = Date.UTC(
 		target.year,
 		target.month - 1,
@@ -104,10 +110,11 @@ const dateInMadrid = (target: Required<LocalDateTime>): Date[] => {
 		target.hour,
 		target.minute,
 	);
+	// Cover IANA offsets roughly UTC−12…UTC+14 (DST folds produce two matches).
 	const candidates: Date[] = [];
-	for (let minutes = -180; minutes <= 180; minutes += 1) {
+	for (let minutes = -18 * 60; minutes <= 18 * 60; minutes += 1) {
 		const candidate = new Date(intendedUtc + minutes * 60_000);
-		if (sameWallTime(candidate, target)) candidates.push(candidate);
+		if (sameWallTime(candidate, target, timeZone)) candidates.push(candidate);
 	}
 	return candidates;
 };
@@ -125,7 +132,7 @@ const validCalendarDay = (
 	);
 };
 
-export const madridCivilMidnight = (value: string): Date | null => {
+export const civilMidnight = (value: string, timeZone: string): Date | null => {
 	const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
 	if (!match) return null;
 	const [, yearText, monthText, dayText] = match;
@@ -133,39 +140,47 @@ export const madridCivilMidnight = (value: string): Date | null => {
 	const month = Number(monthText);
 	const day = Number(dayText);
 	if (!validCalendarDay(year, month, day)) return null;
-	const candidates = dateInMadrid({
-		year,
-		month,
-		day,
-		hour: 0,
-		minute: 0,
-		weekday: "lunes",
-	});
+	const candidates = dateInZone(
+		{
+			year,
+			month,
+			day,
+			hour: 0,
+			minute: 0,
+			weekday: "lunes",
+		},
+		timeZone,
+	);
 	return candidates.length === 1 ? candidates[0] : null;
 };
 
-const calendarBoundary = (value: CalendarBoundary): Date | null => {
+const calendarBoundary = (
+	value: CalendarBoundary,
+	timeZone: string,
+): Date | null => {
 	if (value.dateTime) {
 		const date = new Date(value.dateTime);
 		return Number.isNaN(date.valueOf()) ? null : date;
 	}
-	return value.date ? madridCivilMidnight(value.date) : null;
+	return value.date ? civilMidnight(value.date, timeZone) : null;
 };
 
 export const calendarInterval = (
 	start: CalendarBoundary,
 	end: CalendarBoundary,
+	timeZone: string,
 ): Interval | null => {
-	const startDate = calendarBoundary(start);
-	const endDate = calendarBoundary(end);
+	const startDate = calendarBoundary(start, timeZone);
+	const endDate = calendarBoundary(end, timeZone);
 	return startDate && endDate ? { start: startDate, end: endDate } : null;
 };
 
 export const resolveSpanishDate = (
 	input: LocalDateTime,
 	now: Date,
+	timeZone: string,
 ): DateResolution => {
-	const current = currentParts(now);
+	const current = currentParts(now, timeZone);
 	const year = input.year ?? current.year;
 	const month = input.month ?? current.month;
 	const hour = input.hour ?? 0;
@@ -187,7 +202,7 @@ export const resolveSpanishDate = (
 		minute,
 		weekday: input.weekday ?? "lunes",
 	};
-	const candidates = dateInMadrid(target);
+	const candidates = dateInZone(target, timeZone);
 	if (candidates.length !== 1) {
 		return {
 			ok: false,
@@ -199,7 +214,7 @@ export const resolveSpanishDate = (
 		return { ok: false, reason: "No puedo crear citas en el pasado." };
 	if (input.weekday) {
 		const weekday = new Intl.DateTimeFormat("en-US", {
-			timeZone: MADRID,
+			timeZone,
 			weekday: "long",
 		})
 			.format(start)
@@ -241,35 +256,40 @@ export const classifyProximity = (
 	return PROXIMITY.CLEAR;
 };
 
-export const madridDate = (date: Date): string => {
-	const parts = madridParts(date);
+export const localDate = (date: Date, timeZone: string): string => {
+	const parts = zoneParts(date, timeZone);
 	return `${parts.year}-${parts.month}-${parts.day}`;
 };
 
-export const nextMadridDate = (date: Date): string => {
-	const { year, month, day } = madridLocalDateTime(date);
+export const nextLocalDate = (date: Date, timeZone: string): string => {
+	const { year, month, day } = localDateTime(date, timeZone);
 	const next = new Date(Date.UTC(year, month - 1, day + 1));
 	return `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}-${String(next.getUTCDate()).padStart(2, "0")}`;
 };
 
-export const addMadridDays = (date: string, days: number): string | null => {
-	let current = madridCivilMidnight(date);
+export const addLocalDays = (
+	date: string,
+	days: number,
+	timeZone: string,
+): string | null => {
+	let current = civilMidnight(date, timeZone);
 	if (!current || !Number.isSafeInteger(days) || days < 0) return null;
 	let result = date;
 	for (let index = 0; index < days; index += 1) {
-		result = nextMadridDate(current);
-		current = madridCivilMidnight(result);
+		result = nextLocalDate(current, timeZone);
+		current = civilMidnight(result, timeZone);
 		if (!current) return null;
 	}
 	return result;
 };
 
-export const madridLocalDateTime = (
+export const localDateTime = (
 	date: Date,
+	timeZone: string,
 ): Required<
 	Pick<LocalDateTime, "day" | "month" | "year" | "hour" | "minute">
 > => {
-	const parts = madridParts(date);
+	const parts = zoneParts(date, timeZone);
 	return {
 		day: partNumber(parts, "day"),
 		month: partNumber(parts, "month"),
@@ -279,12 +299,10 @@ export const madridLocalDateTime = (
 	};
 };
 
-export const formatMadrid = (date: Date): string =>
+export const formatLocal = (date: Date, timeZone: string): string =>
 	new Intl.DateTimeFormat("es-ES", {
-		timeZone: MADRID,
+		timeZone,
 		dateStyle: "short",
 		timeStyle: "short",
 		hourCycle: "h23",
 	}).format(date);
-
-export const madridTimeZone = MADRID;

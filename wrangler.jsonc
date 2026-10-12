@@ -1,6 +1,12 @@
 /**
  * For more details on how to configure Wrangler, refer to:
  * https://developers.cloudflare.com/workers/wrangler/configuration/
+ *
+ * Personal deployment values (D1 database_id, calendar ID, Worker URL) belong
+ * in ignored local secrets / a local wrangler override — never commit them.
+ *
+ * D1: omit database_id and let Wrangler auto-provision on deploy, or set it in a
+ * gitignored wrangler.local.jsonc after `wrangler d1 create`.
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
@@ -14,32 +20,13 @@
 	"d1_databases": [
 		{
 			"binding": "DB",
-			"database_name": "telegram-family-bot",
-			"database_id": "00000000-0000-0000-0000-000000000000",
-			"remote": true
+			"database_name": "telegram-family-bot"
 		}
 	],
 	/**
-	 * Smart Placement
-	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
+	 * Non-secret defaults can live in .dev.vars for local development.
+	 * Calendar ID and Worker URL are secrets so each deploy stays private.
 	 */
-	// "placement": {  "mode": "smart" }
-	/**
-	 * Bindings
-	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
-	 * databases, object storage, AI inference, real-time communication and more.
-	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
-	 */
-	/**
-	 * Environment Variables
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
-	 * Note: Use secrets to store sensitive data.
-	 * https://developers.cloudflare.com/workers/configuration/secrets/
-	 */
-	"vars": {
-		"GOOGLE_CALENDAR_ID": "your-calendar-id@group.calendar.google.com",
-		"WORKER_BASE_URL": "https://your-worker.workers.dev"
-	},
 	"secrets": {
 		"required": [
 			"TELEGRAM_BOT_TOKEN",
@@ -49,17 +36,9 @@
 			"GOOGLE_CLIENT_SECRET",
 			"GOOGLE_TOKEN_ENCRYPTION_KEY",
 			"OAUTH_SETUP_ADMIN_TOKEN",
-			"ALLOWED_TELEGRAM_USERS_JSON"
+			"ALLOWED_TELEGRAM_USERS_JSON",
+			"GOOGLE_CALENDAR_ID",
+			"WORKER_BASE_URL"
 		]
 	}
-	/**
-	 * Static Assets
-	 * https://developers.cloudflare.com/workers/static-assets/binding/
-	 */
-	// "assets": {  "directory": "./public/",  "binding": "ASSETS" }
-	/**
-	 * Service Bindings (communicate between multiple Workers)
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
-	 */
-	// "services": [  {   "binding": "MY_SERVICE",   "service": "my-service"  } ]
 }

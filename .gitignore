@@ -165,6 +165,9 @@ dist
 .env*
 !.env.example
 .wrangler/
+wrangler.local.jsonc
+wrangler.local.toml
+
 
 .atl
 .codegraph

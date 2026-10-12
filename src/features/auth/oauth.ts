@@ -1,5 +1,6 @@
 import type { AppConfig } from "../../config/config";
 import { randomId, type Repository } from "../../shared/database";
+import { timingSafeEqual } from "../../shared/timing-safe";
 import type { GoogleCalendar } from "../calendar/google-calendar";
 
 const html = (message: string): Response =>
@@ -20,10 +21,9 @@ export const startOAuth = async (
 	repository: Repository,
 	calendar: GoogleCalendar,
 ): Promise<Response> => {
-	if (
-		request.headers.get("authorization") !==
-		`Bearer ${config.oauthSetupAdminToken}`
-	)
+	const authorization = request.headers.get("authorization") ?? "";
+	const expected = `Bearer ${config.oauthSetupAdminToken}`;
+	if (!timingSafeEqual(authorization, expected))
 		return new Response("Not found", { status: 404 });
 	const state = randomId();
 	await repository.saveOAuthState(state, Date.now());

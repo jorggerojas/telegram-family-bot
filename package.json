@@ -1,7 +1,13 @@
 {
 	"name": "telegram-family-bot",
-	"version": "0.0.0",
+	"version": "0.1.0",
 	"private": true,
+	"description": "Private Spanish Telegram assistant for a shared Google Calendar on Cloudflare Workers",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/jorggerojas/telegram-family-bot.git"
+	},
 	"scripts": {
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
@@ -17,11 +23,11 @@
 		"db:migrate:remote": "wrangler d1 migrations apply DB --remote",
 		"telegram:ids": "node scripts/telegram-ids.mjs",
 		"webhook:set": "node scripts/webhook-set.mjs",
+		"webhook:drop": "node scripts/webhook-drop.mjs",
 		"webhook:info": "node scripts/webhook-info.mjs",
 		"oauth:start": "node scripts/oauth-start.mjs",
 		"commitlint": "commitlint",
-		"prepare": "husky",
-		"gga": "gga run || exit 1"
+		"prepare": "husky"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.15",

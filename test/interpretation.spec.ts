@@ -23,6 +23,8 @@ const draft = (overrides: Partial<Interpretation> = {}): Interpretation => ({
 	...overrides,
 });
 
+const members = ["Alex", "Sam", "Riley"] as const;
+
 describe("deterministic Spanish interpretation normalization", () => {
 	it("requires only actual creation prerequisites despite model missing optional fields", () => {
 		const value = normalizeInterpretation(
@@ -30,6 +32,8 @@ describe("deterministic Spanish interpretation normalization", () => {
 			"dentista sábado 10 de octubre a las 18",
 			"Alex",
 			new Date("2026-10-10T01:32:00.000Z"),
+			null,
+			{ memberNames: members },
 		);
 		expect(value).toMatchObject({
 			title: "Cita con dentista de Alex",
@@ -48,7 +52,7 @@ describe("deterministic Spanish interpretation normalization", () => {
 			{
 				message: "dentista sábado",
 				sender: "Alex",
-				nowMadrid: "2026-10-09T14:00:00+02:00",
+				nowLocal: "2026-10-09T14:00:00+02:00",
 				previousDraft: null,
 			},
 			{
@@ -78,7 +82,7 @@ describe("deterministic Spanish interpretation normalization", () => {
 			},
 		);
 
-		expect(result).toEqual(draft());
+		expect(result).toEqual({ interpretation: draft(), provider: "groq" });
 		expect(requestBody?.response_format).toMatchObject({
 			type: "json_schema",
 			json_schema: {
@@ -119,10 +123,24 @@ describe("deterministic Spanish interpretation normalization", () => {
 				message,
 				"Sam",
 				new Date("2026-10-09T12:00:00.000Z"),
+				null,
+				{ memberNames: members },
 			);
 			expect(value).toMatchObject({ day, month, year: 2026, hour, title });
 		},
 	);
+
+	it("attributes titles to a named member other than the sender", () => {
+		const value = normalizeInterpretation(
+			draft(),
+			"dentista de Riley el 10 de octubre a las 18",
+			"Alex",
+			new Date("2026-10-09T12:00:00.000Z"),
+			null,
+			{ memberNames: members },
+		);
+		expect(value.title).toBe("Cita con dentista de Riley");
+	});
 
 	it("does not silently choose an ambiguous named hour", () => {
 		const value = normalizeInterpretation(
@@ -399,6 +417,67 @@ describe("deterministic Spanish interpretation normalization", () => {
 			month: 10,
 			year: 2026,
 			hour: 8,
+			missing: [],
+		});
+	});
+
+	it("treats an english clock as time-only and drops an invented date", () => {
+		const evening = new Date("2026-10-12T19:27:00.000Z");
+		const tomorrow = normalizeInterpretation(
+			draft({
+				title: "sprint planning",
+				day: 26,
+				month: 10,
+				year: 2026,
+				hour: 11,
+				minute: 0,
+			}),
+			"sprint planning 11am",
+			"Alex",
+			evening,
+		);
+		expect(tomorrow).toMatchObject({
+			title: "sprint planning",
+			day: 13,
+			month: 10,
+			year: 2026,
+			hour: 11,
+			minute: 0,
+			weekday: null,
+			missing: [],
+		});
+		const morning = normalizeInterpretation(
+			draft({
+				title: "sprint planning",
+				day: 26,
+				month: 10,
+				year: 2026,
+				hour: 11,
+			}),
+			"sprint planning 11 am",
+			"Alex",
+			new Date("2026-10-12T06:00:00.000Z"),
+		);
+		expect(morning).toMatchObject({
+			day: 12,
+			month: 10,
+			year: 2026,
+			hour: 11,
+			minute: 0,
+			missing: [],
+		});
+		const dated = normalizeInterpretation(
+			draft({ day: 26, month: 10, year: 2026, hour: 9 }),
+			"sprint planning 11pm el 20 de octubre",
+			"Alex",
+			evening,
+		);
+		expect(dated).toMatchObject({
+			day: 20,
+			month: 10,
+			year: 2026,
+			hour: 23,
+			minute: 0,
 			missing: [],
 		});
 	});

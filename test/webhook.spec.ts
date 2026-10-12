@@ -141,7 +141,7 @@ describe("Telegram webhook Worker boundary", () => {
 		).toEqual({ count: 0 });
 	});
 
-	it("accepts private Alex and Sam commands without Gemini or Calendar requests", async () => {
+	it("accepts private allowlisted commands without Gemini or Calendar requests", async () => {
 		const fetcher = telegram();
 		vi.stubGlobal("fetch", fetcher);
 		for (const update of [statusUpdate(10, 100), statusUpdate(11, 200)])

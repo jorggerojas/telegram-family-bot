@@ -5,6 +5,7 @@ import { finishOAuth, startOAuth } from "./features/auth/oauth";
 import { GoogleCalendar } from "./features/calendar/google-calendar";
 import { createBot } from "./features/telegram/bot";
 import { Repository } from "./shared/database";
+import { timingSafeEqual } from "./shared/timing-safe";
 
 const updateSchema = z
 	.object({ update_id: z.number().int().nonnegative() })
@@ -32,7 +33,7 @@ export default {
 		const rawEnv = env as unknown as Record<string, unknown>;
 		const diagnostics = configurationDiagnostics(rawEnv);
 		if (new URL(request.url).pathname === "/health")
-			return Response.json({ ok: diagnostics.length === 0, diagnostics });
+			return Response.json({ ok: diagnostics.length === 0 });
 		if (diagnostics.length > 0)
 			return new Response("Service unavailable", { status: 503 });
 		const config = readConfig(rawEnv);
@@ -46,8 +47,10 @@ export default {
 		if (request.method !== "POST" || url.pathname !== "/webhooks/telegram")
 			return new Response("Not found", { status: 404 });
 		if (
-			request.headers.get("x-telegram-bot-api-secret-token") !==
-			config.telegramWebhookSecret
+			!timingSafeEqual(
+				request.headers.get("x-telegram-bot-api-secret-token") ?? "",
+				config.telegramWebhookSecret,
+			)
 		)
 			return new Response("Not found", { status: 404 });
 		const update = await parseUpdate(request);

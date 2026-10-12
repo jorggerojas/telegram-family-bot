@@ -1,6 +1,10 @@
 import { Bot, InlineKeyboard } from "grammy";
 import type { AppConfig, FamilyMember } from "../../config/config";
-import { interpretMessage, type Interpretation } from "../ai/interpret";
+import {
+	interpretMessage,
+	providerLabel,
+	type Interpretation,
+} from "../ai/interpret";
 import { normalizeInterpretation } from "../ai/normalization";
 import {
 	DEFAULT_EVENT_REMINDERS,
@@ -9,13 +13,13 @@ import {
 	type GoogleCalendar,
 } from "../calendar/google-calendar";
 import {
-	addMadridDays,
+	addLocalDays,
 	calendarInterval,
 	classifyProximity,
-	formatMadrid,
-	madridDate,
-	madridLocalDateTime,
-	nextMadridDate,
+	formatLocal,
+	localDate,
+	localDateTime,
+	nextLocalDate,
 	resolveSpanishDate,
 } from "../../shared/scheduling";
 import type { Repository } from "../../shared/database";
@@ -54,8 +58,11 @@ const senderFrom = (
 ): FamilyMember | null =>
 	id === undefined ? null : (config.allowedUsers.get(String(id)) ?? null);
 
-const interval = (event: CalendarEvent): { start: Date; end: Date } | null =>
-	calendarInterval(event.start, event.end);
+const interval = (
+	event: CalendarEvent,
+	timeZone: string,
+): { start: Date; end: Date } | null =>
+	calendarInterval(event.start, event.end, timeZone);
 
 const titleDefault = (message: string, sender: FamilyMember): string | null => {
 	const text = message.toLocaleLowerCase("es-ES");
@@ -66,24 +73,24 @@ const titleDefault = (message: string, sender: FamilyMember): string | null => {
 	return null;
 };
 
-const eventLabel = (event: CalendarEvent): string => {
+const eventLabel = (event: CalendarEvent, timeZone: string): string => {
 	if (event.start.date) {
 		const first = new Intl.DateTimeFormat("es-ES", {
 			dateStyle: "short",
-			timeZone: "Europe/Madrid",
+			timeZone,
 		}).format(new Date(`${event.start.date}T12:00:00.000Z`));
 		if (!event.end.date)
 			return `${event.summary ?? "Sin título"} — todo el día ${first}`;
 		const last = new Intl.DateTimeFormat("es-ES", {
 			dateStyle: "short",
-			timeZone: "Europe/Madrid",
+			timeZone,
 		}).format(
 			new Date(`${event.end.date}T12:00:00.000Z`).getTime() - 86_400_000,
 		);
 		return `${event.summary ?? "Sin título"} — todo el día ${first}${first === last ? "" : `–${last}`}`;
 	}
-	const value = interval(event);
-	return `${event.summary ?? "Sin título"} — ${value ? formatMadrid(value.start) : "sin fecha"}`;
+	const value = interval(event, timeZone);
+	return `${event.summary ?? "Sin título"} — ${value ? formatLocal(value.start, timeZone) : "sin fecha"}`;
 };
 
 const missingQuestion = (value: Interpretation): string =>
@@ -115,6 +122,7 @@ const mutationFor = (
 	message: string,
 	duration: number,
 	now: Date,
+	timeZone: string,
 ): { event: CalendarMutation; label: string } | { error: string } => {
 	const title = value.title ?? titleDefault(message, sender);
 	if (!title) return { error: "Necesito el título del evento." };
@@ -127,14 +135,15 @@ const mutationFor = (
 				year: value.year ?? undefined,
 			},
 			now,
+			timeZone,
 		);
 		if (!result.ok) return { error: result.reason };
 		return {
 			event: withDefaultReminders({
 				summary: title,
 				location: value.location ?? undefined,
-				start: { date: madridDate(result.value.start) },
-				end: { date: nextMadridDate(result.value.start) },
+				start: { date: localDate(result.value.start, timeZone) },
+				end: { date: nextLocalDate(result.value.start, timeZone) },
 			}),
 			label: `${title}, todo el día`,
 		};
@@ -151,6 +160,7 @@ const mutationFor = (
 			weekday: value.weekday ?? undefined,
 		},
 		now,
+		timeZone,
 	);
 	if (!result.ok) {
 		if (result.reason === "El día de la semana no coincide con la fecha.")
@@ -165,11 +175,11 @@ const mutationFor = (
 			location: value.location ?? undefined,
 			start: {
 				dateTime: result.value.start.toISOString(),
-				timeZone: "Europe/Madrid",
+				timeZone,
 			},
-			end: { dateTime: end.toISOString(), timeZone: "Europe/Madrid" },
+			end: { dateTime: end.toISOString(), timeZone },
 		}),
-		label: `${title}, ${formatMadrid(result.value.start)} (${minutes} min)`,
+		label: `${title}, ${formatLocal(result.value.start, timeZone)} (${minutes} min)`,
 	};
 };
 
@@ -179,6 +189,7 @@ const updateMutationFor = (
 	sender: FamilyMember,
 	message: string,
 	now: Date,
+	timeZone: string,
 ): { event: CalendarMutation; label: string } | { error: string } => {
 	if (old.recurrence?.length)
 		return { error: "No gestiono eventos recurrentes." };
@@ -205,9 +216,10 @@ const updateMutationFor = (
 			message,
 			1440,
 			now,
+			timeZone,
 		);
 		if ("error" in target) return target;
-		const oldInterval = calendarInterval(old.start, old.end);
+		const oldInterval = calendarInterval(old.start, old.end, timeZone);
 		const durationDays = oldInterval
 			? Math.max(
 					1,
@@ -219,7 +231,7 @@ const updateMutationFor = (
 			: 1;
 		const start = target.event.start.date;
 		if (!start) return { error: "No gestiono ese evento." };
-		const end = addMadridDays(start, durationDays);
+		const end = addLocalDays(start, durationDays, timeZone);
 		if (!end) return { error: "No gestiono ese evento." };
 		return {
 			event: withDefaultReminders({
@@ -238,9 +250,9 @@ const updateMutationFor = (
 		};
 	if (value.weekday && value.day === null)
 		return { error: "Indica una fecha exacta para cambiar este evento." };
-	const previous = interval(old);
+	const previous = interval(old, timeZone);
 	if (!previous) return { error: "No gestiono ese evento." };
-	const local = madridLocalDateTime(previous.start);
+	const local = localDateTime(previous.start, timeZone);
 	const target = mutationFor(
 		{
 			...value,
@@ -257,6 +269,7 @@ const updateMutationFor = (
 		value.duration_minutes ??
 			Math.round((previous.end.getTime() - previous.start.getTime()) / 60_000),
 		now,
+		timeZone,
 	);
 	if ("error" in target) return target;
 	return {
@@ -271,13 +284,17 @@ const updateMutationFor = (
 const busyWarnings = (
 	events: CalendarEvent[],
 	proposed: CalendarMutation,
+	timeZone: string,
 	exclude?: string,
 ): string[] => {
-	const proposedInterval = interval({
-		id: "proposed",
-		start: proposed.start,
-		end: proposed.end,
-	});
+	const proposedInterval = interval(
+		{
+			id: "proposed",
+			start: proposed.start,
+			end: proposed.end,
+		},
+		timeZone,
+	);
 	if (!proposedInterval) return [];
 	return events.flatMap((event) => {
 		if (
@@ -286,7 +303,7 @@ const busyWarnings = (
 			event.status === "cancelled"
 		)
 			return [];
-		const existing = interval(event);
+		const existing = interval(event, timeZone);
 		if (!existing) return [];
 		const relation = classifyProximity(
 			proposedInterval.start,
@@ -296,7 +313,7 @@ const busyWarnings = (
 		return relation === "CLEAR"
 			? []
 			: [
-					`${relation === "OVERLAP" ? "Se solapa con" : "Está cerca de"} ${eventLabel(event)}`,
+					`${relation === "OVERLAP" ? "Se solapa con" : "Está cerca de"} ${eventLabel(event, timeZone)}`,
 				];
 	});
 };
@@ -305,9 +322,12 @@ const listReply = async (
 	calendar: GoogleCalendar,
 	from: Date,
 	until: Date,
+	timeZone: string,
 ): Promise<string> => {
 	const events = await calendar.list(from, until);
-	return events.length ? events.map(eventLabel).join("\n") : "No hay eventos.";
+	return events.length
+		? events.map((event) => eventLabel(event, timeZone)).join("\n")
+		: "No hay eventos.";
 };
 
 const availabilityReply = async (
@@ -315,6 +335,7 @@ const availabilityReply = async (
 	from: Date,
 	until: Date,
 	minutes: number,
+	timeZone: string,
 ): Promise<string> => {
 	const busy = (await calendar.list(from, until))
 		.filter(
@@ -322,7 +343,7 @@ const availabilityReply = async (
 				event.transparency !== "transparent" && event.status !== "cancelled",
 		)
 		.flatMap((event) => {
-			const value = interval(event);
+			const value = interval(event, timeZone);
 			return value ? [value] : [];
 		})
 		.sort((left, right) => left.start.getTime() - right.start.getTime());
@@ -341,7 +362,10 @@ const availabilityReply = async (
 	return gaps.length
 		? `Huecos reales de al menos ${minutes} min:\n${gaps
 				.slice(0, 3)
-				.map((gap) => `${formatMadrid(gap.start)}–${formatMadrid(gap.end)}`)
+				.map(
+					(gap) =>
+						`${formatLocal(gap.start, timeZone)}–${formatLocal(gap.end, timeZone)}`,
+				)
 				.join("\n")}`
 		: "No hay huecos reales con esa duración en este periodo.";
 };
@@ -368,6 +392,8 @@ export const createBot = (
 	clock = (): Date => new Date(),
 ): Bot => {
 	const bot = new Bot(config.telegramBotToken);
+	const timeZone = config.defaultTimeZone;
+	const memberNames = [...config.allowedUsers.values()];
 	const privateUser = (
 		id: number | undefined,
 		chatType: string | undefined,
@@ -386,15 +412,19 @@ export const createBot = (
 		existingActionId?: string,
 	): Promise<unknown> => {
 		const prepared = withDefaultReminders(event);
-		const start = interval({
-			id: "new",
-			start: prepared.start,
-			end: prepared.end,
-		});
+		const start = interval(
+			{
+				id: "new",
+				start: prepared.start,
+				end: prepared.end,
+			},
+			timeZone,
+		);
 		const warnings = start
 			? busyWarnings(
 					await calendar.nearbyBusy(start.start, start.end),
 					prepared,
+					timeZone,
 				)
 			: [];
 		const now = clock().getTime();
@@ -452,7 +482,7 @@ export const createBot = (
 				clock().getTime(),
 			);
 			return reply(
-				`Borrar: ${eventLabel(old)}\nNo se borrará hasta confirmarlo.`,
+				`Borrar: ${eventLabel(old, timeZone)}\nNo se borrará hasta confirmarlo.`,
 				{
 					reply_markup: new InlineKeyboard()
 						.text("Borrar", `c:${action}`)
@@ -466,6 +496,7 @@ export const createBot = (
 			sender,
 			message,
 			clock(),
+			timeZone,
 		);
 		if ("error" in proposed) return reply(proposed.error);
 		const proposedEvent: CalendarEvent = {
@@ -474,7 +505,7 @@ export const createBot = (
 			end: proposed.event.end,
 			summary: proposed.event.summary,
 		};
-		const proposedInterval = interval(proposedEvent);
+		const proposedInterval = interval(proposedEvent, timeZone);
 		const warnings = proposedInterval
 			? busyWarnings(
 					await calendar.nearbyBusy(
@@ -483,6 +514,7 @@ export const createBot = (
 						old.id,
 					),
 					proposed.event,
+					timeZone,
 					old.id,
 				)
 			: [];
@@ -499,7 +531,7 @@ export const createBot = (
 			clock().getTime(),
 		);
 		return reply(
-			`${warnings.join("\n")}${warnings.length ? "\n" : ""}Cambiar:\nAntes: ${eventLabel(old)}\nPropuesto: ${eventLabel(proposedEvent)}\n${REMINDER_LABEL}\nNo se guardará hasta confirmarlo.`,
+			`${warnings.join("\n")}${warnings.length ? "\n" : ""}Cambiar:\nAntes: ${eventLabel(old, timeZone)}\nPropuesto: ${eventLabel(proposedEvent, timeZone)}\n${REMINDER_LABEL}\nNo se guardará hasta confirmarlo.`,
 			{
 				reply_markup: new InlineKeyboard()
 					.text(
@@ -552,6 +584,7 @@ export const createBot = (
 						calendar,
 						new Date(now.getTime() + offset * 86_400_000),
 						new Date(now.getTime() + (offset + days) * 86_400_000),
+						timeZone,
 					),
 				);
 			} catch {
@@ -573,11 +606,11 @@ export const createBot = (
 			chatId,
 			now.getTime(),
 		);
-		const interpreted = await interpretMessage(
+		const answered = await interpretMessage(
 			{
 				message: ctx.message.text,
 				sender,
-				nowMadrid: formatMadrid(now),
+				nowLocal: formatLocal(now, timeZone),
 				previousDraft: draft,
 			},
 			{
@@ -587,7 +620,7 @@ export const createBot = (
 				geminiModel: config.geminiModel,
 			},
 		);
-		if (!interpreted) {
+		if (!answered) {
 			await repository.saveConversation(
 				ownerId,
 				chatId,
@@ -596,6 +629,12 @@ export const createBot = (
 			);
 			return ctx.reply("¿Qué día y a qué hora?");
 		}
+		const interpreted = answered.interpretation;
+		const answer = (
+			text: string,
+			options?: { reply_markup?: InlineKeyboard },
+		): Promise<unknown> =>
+			ctx.reply(`${text}\n${providerLabel[answered.provider]}`, options);
 		if (interpreted.intent === "UNKNOWN") {
 			await repository.saveConversation(
 				ownerId,
@@ -603,7 +642,7 @@ export const createBot = (
 				draft ? `${draft}\n${ctx.message.text}` : ctx.message.text,
 				now.getTime(),
 			);
-			return ctx.reply("¿Quieres crear un evento o buscar uno existente?");
+			return answer("¿Quieres crear un evento o buscar uno existente?");
 		}
 		const value = normalizeInterpretation(
 			interpreted,
@@ -611,6 +650,7 @@ export const createBot = (
 			sender,
 			now,
 			draft,
+			{ memberNames, timeZone },
 		);
 		if (value.intent === "CLARIFICATION" || value.missing.length) {
 			await repository.saveConversation(
@@ -619,7 +659,7 @@ export const createBot = (
 				draft ? `${draft}\n${ctx.message.text}` : ctx.message.text,
 				now.getTime(),
 			);
-			return ctx.reply(
+			return answer(
 				value.intent === "CLARIFICATION"
 					? "¿Quieres crear un evento o buscar uno existente?"
 					: missingQuestion(value),
@@ -630,22 +670,24 @@ export const createBot = (
 			value.intent === "CHECK_AVAILABILITY"
 		) {
 			try {
-				return ctx.reply(
+				return answer(
 					value.intent === "CHECK_AVAILABILITY"
 						? await availabilityReply(
 								calendar,
 								now,
 								new Date(now.getTime() + 7 * 86_400_000),
 								value.duration_minutes ?? config.defaultDurationMinutes,
+								timeZone,
 							)
 						: await listReply(
 								calendar,
 								now,
 								new Date(now.getTime() + 7 * 86_400_000),
+								timeZone,
 							),
 				);
 			} catch {
-				return ctx.reply(
+				return answer(
 					"No puedo consultar el calendario ahora. Revisa la conexión.",
 				);
 			}
@@ -665,13 +707,16 @@ export const createBot = (
 			const payload = parsePayload(pendingCreate.payload);
 			const previous = payload?.event;
 			if (previous) {
-				const previousInterval = interval({
-					id: "pending",
-					start: previous.start,
-					end: previous.end,
-				});
+				const previousInterval = interval(
+					{
+						id: "pending",
+						start: previous.start,
+						end: previous.end,
+					},
+					timeZone,
+				);
 				const local = previousInterval
-					? madridLocalDateTime(previousInterval.start)
+					? localDateTime(previousInterval.start, timeZone)
 					: null;
 				const revised = mutationFor(
 					{
@@ -699,6 +744,7 @@ export const createBot = (
 					ctx.message.text,
 					config.defaultDurationMinutes,
 					now,
+					timeZone,
 				);
 				if ("error" in revised) {
 					await repository.saveConversation(
@@ -707,7 +753,7 @@ export const createBot = (
 						draft ? `${draft}\n${ctx.message.text}` : ctx.message.text,
 						now.getTime(),
 					);
-					return ctx.reply(revised.error);
+					return answer(revised.error);
 				}
 				await repository.cancelConversation(ownerId, chatId);
 				return createPreview(
@@ -716,7 +762,7 @@ export const createBot = (
 					sender,
 					revised.event,
 					revised.label,
-					ctx.reply.bind(ctx),
+					answer,
 					pendingCreate.id,
 				);
 			}
@@ -728,6 +774,7 @@ export const createBot = (
 				ctx.message.text,
 				config.defaultDurationMinutes,
 				now,
+				timeZone,
 			);
 			if ("error" in prepared) {
 				await repository.saveConversation(
@@ -736,7 +783,7 @@ export const createBot = (
 					draft ? `${draft}\n${ctx.message.text}` : ctx.message.text,
 					now.getTime(),
 				);
-				return ctx.reply(prepared.error);
+				return answer(prepared.error);
 			}
 			await repository.cancelConversation(ownerId, chatId);
 			return createPreview(
@@ -745,7 +792,7 @@ export const createBot = (
 				sender,
 				prepared.event,
 				prepared.label,
-				ctx.reply.bind(ctx),
+				answer,
 			);
 		}
 		if (value.intent !== "UPDATE_EVENT" && value.intent !== "DELETE_EVENT") {
@@ -755,7 +802,7 @@ export const createBot = (
 				draft ? `${draft}\n${ctx.message.text}` : ctx.message.text,
 				now.getTime(),
 			);
-			return ctx.reply("¿Quieres crear un evento o buscar uno existente?");
+			return answer("¿Quieres crear un evento o buscar uno existente?");
 		}
 		const matches = await searchEvents(
 			calendar,
@@ -763,11 +810,11 @@ export const createBot = (
 			now,
 		);
 		if (!matches.length)
-			return ctx.reply(
+			return answer(
 				"No encuentro un evento que coincida. Indica un título y fecha más exactos.",
 			);
 		if (matches.some((event) => event.recurrence?.length))
-			return ctx.reply("No gestiono eventos recurrentes.");
+			return answer("No gestiono eventos recurrentes.");
 		const operation =
 			value.intent === "UPDATE_EVENT" ? ACTIONS.UPDATE : ACTIONS.DELETE;
 		if (matches.length > 1) {
@@ -786,16 +833,16 @@ export const createBot = (
 					}),
 					now.getTime(),
 				);
-				keyboard.text(eventLabel(match), `s:${id}`).row();
+				keyboard.text(eventLabel(match, timeZone), `s:${id}`).row();
 			}
-			return ctx.reply("He encontrado varios eventos. Elige uno:", {
+			return answer("He encontrado varios eventos. Elige uno:", {
 				reply_markup: keyboard,
 			});
 		}
 		const match = matches[0];
-		if (!match.id) return ctx.reply("No gestiono ese evento.");
+		if (!match.id) return answer("No gestiono ese evento.");
 		const current = await calendar.get(match.id);
-		if (!current) return ctx.reply("El evento ya no existe.");
+		if (!current) return answer("El evento ya no existe.");
 		return operationPreview(
 			ownerId,
 			chatId,
@@ -804,7 +851,7 @@ export const createBot = (
 			current,
 			value,
 			ctx.message.text,
-			ctx.reply.bind(ctx),
+			answer,
 		);
 	});
 
@@ -940,7 +987,7 @@ export const createBot = (
 					clock().getTime(),
 				);
 				await ctx.answerCallbackQuery({ text: "Guardado." });
-				return ctx.reply(`Guardado: ${eventLabel(created)}`);
+				return ctx.reply(`Guardado: ${eventLabel(created, timeZone)}`);
 			}
 			if (!payload.eventId || !payload.etag) throw new Error("Invalid action");
 			if (action.kind === ACTIONS.DELETE) {
@@ -968,7 +1015,7 @@ export const createBot = (
 					clock().getTime(),
 				);
 				await ctx.answerCallbackQuery({ text: "Actualizado." });
-				return ctx.reply(`Actualizado: ${eventLabel(updated)}`);
+				return ctx.reply(`Actualizado: ${eventLabel(updated, timeZone)}`);
 			}
 			throw new Error("Invalid action");
 		} catch (error) {

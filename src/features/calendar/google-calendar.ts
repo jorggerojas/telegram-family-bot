@@ -390,7 +390,11 @@ export class GoogleCalendar {
 				event.status !== "cancelled" &&
 				event.transparency !== "transparent" &&
 				(() => {
-					const interval = calendarInterval(event.start, event.end);
+					const interval = calendarInterval(
+						event.start,
+						event.end,
+						this.config.defaultTimeZone,
+					);
 					return (
 						interval !== null &&
 						interval.end >= minimum &&

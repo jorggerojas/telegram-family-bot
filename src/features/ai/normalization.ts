@@ -1,6 +1,16 @@
 import type { FamilyMember } from "../../config/config";
-import { madridLocalDateTime } from "../../shared/scheduling";
+import { localDateTime } from "../../shared/scheduling";
 import type { Interpretation } from "./interpret";
+
+export interface NormalizeOptions {
+	memberNames?: readonly string[];
+	timeZone?: string;
+}
+
+const DEFAULT_TIME_ZONE = "Europe/Madrid";
+
+const escapeRegExp = (value: string): string =>
+	value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const MONTHS = {
 	enero: 1,
@@ -69,8 +79,8 @@ type Extracted = Partial<
 const text = (value: string): string =>
 	value.toLocaleLowerCase("es-ES").normalize("NFC");
 
-const dateParts = (date: Date): [number, number, number] => {
-	const value = madridLocalDateTime(date);
+const dateParts = (date: Date, timeZone: string): [number, number, number] => {
+	const value = localDateTime(date, timeZone);
 	return [value.year, value.month, value.day];
 };
 
@@ -100,8 +110,12 @@ const validCalendarDay = (
 	);
 };
 
-const relativeDate = (value: string, now: Date): Extracted => {
-	const [year, month, day] = dateParts(now);
+const relativeDate = (
+	value: string,
+	now: Date,
+	timeZone: string,
+): Extracted => {
+	const [year, month, day] = dateParts(now, timeZone);
 	if (/\bhoy\b/.test(value)) return { year, month, day };
 	if (/\bpasado mañana\b/.test(value)) {
 		const [nextYear, nextMonth, nextDay] = addDays(year, month, day, 2);
@@ -135,19 +149,30 @@ const relativeDate = (value: string, now: Date): Extracted => {
 	return { year: nextYear, month: nextMonth, day: nextDay, weekday };
 };
 
+const namedMember = (
+	value: string,
+	sender: FamilyMember,
+	memberNames: readonly string[],
+): FamilyMember => {
+	const names = memberNames.length > 0 ? memberNames : [sender];
+	const pattern = names
+		.map((name) => escapeRegExp(name.toLocaleLowerCase("es-ES")))
+		.join("|");
+	if (!pattern) return sender;
+	const match = new RegExp(`\\b(?:${pattern})\\b`, "i").exec(value)?.[0];
+	if (!match) return sender;
+	const lowered = match.toLocaleLowerCase("es-ES");
+	return (
+		names.find((name) => name.toLocaleLowerCase("es-ES") === lowered) ?? sender
+	);
+};
+
 const explicitTitle = (
 	value: string,
 	sender: FamilyMember,
+	memberNames: readonly string[],
 ): string | undefined => {
-	const owner = /\b(?:alex|sam)\b/.exec(value)?.[0];
-	const person =
-		owner === "Alex" || owner === "Sam"
-			? owner
-			: owner === "jorge"
-				? "Alex"
-				: owner === "ana"
-					? "Sam"
-					: sender;
+	const person = namedMember(value, sender, memberNames);
 	if (/\bdentista\b/.test(value)) return `Cita con dentista de ${person}`;
 	if (/\bdoctora?\b|\bm[eé]dico\b/.test(value))
 		return `Cita médica de ${person}`;
@@ -180,8 +205,12 @@ const applyMeridiem = (
 	result.minute ??= 0;
 };
 
-const extractBareDay = (value: string, now: Date): Extracted => {
-	const [year, month, today] = dateParts(now);
+const extractBareDay = (
+	value: string,
+	now: Date,
+	timeZone: string,
+): Extracted => {
+	const [year, month, today] = dateParts(now, timeZone);
 	const thisMonth = value.match(/\b(\d{1,2})\s+de\s+este\s+mes\b/);
 	if (thisMonth) {
 		const day = Number(thisMonth[1]);
@@ -202,19 +231,23 @@ const extract = (
 	message: string,
 	sender: FamilyMember,
 	now: Date,
+	memberNames: readonly string[],
+	timeZone: string,
 ): Extracted => {
 	const value = text(message);
-	const result: Extracted = { ...relativeDate(value, now) };
+	const result: Extracted = { ...relativeDate(value, now, timeZone) };
 	const namedDay = value.match(
 		/\b(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)(?:\s+de\s+(\d{4}))?\b/,
 	);
 	if (namedDay) {
 		result.day = Number(namedDay[1]);
 		result.month = MONTHS[namedDay[2] as keyof typeof MONTHS];
-		result.year = namedDay[3] ? Number(namedDay[3]) : dateParts(now)[0];
+		result.year = namedDay[3]
+			? Number(namedDay[3])
+			: dateParts(now, timeZone)[0];
 	}
 	if (result.day === undefined) {
-		const bare = extractBareDay(value, now);
+		const bare = extractBareDay(value, now, timeZone);
 		Object.assign(result, bare);
 	}
 	const weekday = value.match(
@@ -232,7 +265,7 @@ const extract = (
 		result.ambiguousDate = true;
 	}
 	if (weekday && !namedDay && !weekdayNumber && result.day === undefined) {
-		const [year, month, day] = dateParts(now);
+		const [year, month, day] = dateParts(now, timeZone);
 		let offset = (WEEKDAYS[weekday] - weekdayFor(year, month, day) + 7) % 7;
 		if (offset === 0) offset = 7;
 		const [nextYear, nextMonth, nextDay] = addDays(year, month, day, offset);
@@ -272,6 +305,16 @@ const extract = (
 		if (numericClock) {
 			applyMeridiem(result, Number(numericClock[1]), numericClock[3]);
 			result.minute = Number(numericClock[2]);
+		}
+	}
+	if (result.hour === undefined && !result.ambiguousTime) {
+		const englishClock = value.match(
+			/\b(\d{1,2})(?:[:.](\d{2}))?\s*(am|a\.m\.|pm|p\.m\.)\b/,
+		);
+		const hour = englishClock ? Number(englishClock[1]) : Number.NaN;
+		if (englishClock && hour >= 1 && hour <= 12) {
+			applyMeridiem(result, hour, englishClock[3]);
+			if (englishClock[2]) result.minute = Number(englishClock[2]);
 		}
 	}
 	if (/\bmediod[ií]a\b/.test(value)) {
@@ -316,7 +359,7 @@ const extract = (
 			? amount * 60
 			: amount;
 	}
-	result.title = explicitTitle(value, sender);
+	result.title = explicitTitle(value, sender, memberNames);
 	if (
 		result.day !== undefined ||
 		result.month !== undefined ||
@@ -341,9 +384,10 @@ const applyCreateDefaults = (
 	value: Interpretation,
 	now: Date,
 	needsMonth: boolean,
+	timeZone: string,
 ): Interpretation => {
 	if (value.intent !== "CREATE_EVENT" || value.all_day) return value;
-	const current = madridLocalDateTime(now);
+	const current = localDateTime(now, timeZone);
 	let day = value.day;
 	let month = value.month;
 	let year = value.year;
@@ -373,10 +417,15 @@ export const normalizeInterpretation = (
 	sender: FamilyMember,
 	now: Date,
 	previousDraft: string | null = null,
+	options: NormalizeOptions = {},
 ): Interpretation => {
-	const current = extract(message, sender, now);
+	const timeZone = options.timeZone ?? DEFAULT_TIME_ZONE;
+	const memberNames = options.memberNames ?? [sender];
+	const current = extract(message, sender, now, memberNames, timeZone);
 	const explicit = merge(
-		previousDraft ? extract(previousDraft, sender, now) : {},
+		previousDraft
+			? extract(previousDraft, sender, now, memberNames, timeZone)
+			: {},
 		current,
 	);
 	if (current.hour !== undefined) explicit.ambiguousTime = false;
@@ -404,6 +453,7 @@ export const normalizeInterpretation = (
 		},
 		now,
 		Boolean(explicit.needsMonth),
+		timeZone,
 	);
 	const missing = new Set(value.missing);
 	if (value.intent === "CREATE_EVENT") {

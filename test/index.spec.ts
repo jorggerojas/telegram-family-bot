@@ -9,7 +9,7 @@ import worker from "../src/index";
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 
 describe("worker health route", () => {
-	it("returns safe configuration diagnostics without secret values", async () => {
+	it("returns only ok without leaking configuration diagnostics", async () => {
 		const context = createExecutionContext();
 		const invalidEnv = {
 			...env,
@@ -22,9 +22,10 @@ describe("worker health route", () => {
 		);
 		await waitOnExecutionContext(context);
 		expect(response.status).toBe(200);
-		const body = await response.json<{ ok: boolean; diagnostics: string[] }>();
+		const body = await response.json<{ ok: boolean; diagnostics?: string[] }>();
 		expect(body.ok).toBe(false);
-		expect(body.diagnostics).toContain("GOOGLE_CLIENT_SECRET");
-		expect(body.diagnostics.join(",")).not.toContain("test-secret");
+		expect(body.diagnostics).toBeUndefined();
+		expect(JSON.stringify(body)).not.toContain("GOOGLE_CLIENT_SECRET");
+		expect(JSON.stringify(body)).not.toContain("test-secret");
 	});
 });

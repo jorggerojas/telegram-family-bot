@@ -588,7 +588,7 @@ describe("Telegram confirmation workflow", () => {
 		}
 	});
 
-	it("uses fixed Madrid clock and normalizes Sam's explicit dentist appointment", async () => {
+	it("uses fixed local clock and normalizes Sam's explicit dentist appointment", async () => {
 		const test = setup(interpretation({ title: "dentista" }));
 		try {
 			const bot = test.create();
@@ -604,6 +604,7 @@ describe("Telegram confirmation workflow", () => {
 			expect(test.sent.join("\n")).toContain(
 				"Preparado: Cita con dentista de Sam, 10/10/26, 18:00 (60 min)",
 			);
+			expect(test.sent.join("\n")).toContain("\\nGEM");
 			expect(test.sent.join("\n")).not.toContain("¿");
 			expect(test.counts()).toEqual({ inserts: 0, patches: 0, deletes: 0 });
 		} finally {
@@ -615,7 +616,7 @@ describe("Telegram confirmation workflow", () => {
 		["spring gap", 29, 3, "2026-03-30"],
 		["autumn fold", 25, 10, "2026-10-26"],
 	])(
-		"uses next civil Madrid date for all-day %s",
+		"uses next civil local date for all-day %s",
 		async (_name, day, month, end) => {
 			const test = setup(
 				interpretation({

@@ -23,8 +23,9 @@ const aiProviders = {
 };
 
 describe("private integration boundaries", () => {
-	it("requires exactly Alex and Sam numeric allowlist IDs", () => {
+	it("accepts unique allowlisted member names", () => {
 		expect(readConfig(baseConfig).allowedUsers.get("100")).toBe("Alex");
+		expect(readConfig(baseConfig).defaultTimeZone).toBe("Europe/Madrid");
 		expect(
 			readConfig({ ...baseConfig, GROQ_API_KEY: "" }).groqApiKey,
 		).toBeNull();
@@ -34,6 +35,19 @@ describe("private integration boundaries", () => {
 		expect(
 			readConfig({ ...baseConfig, OPENAI_API_KEY: "nv-key" }).openaiApiKey,
 		).toBe("nv-key");
+		expect(
+			readConfig({
+				...baseConfig,
+				ALLOWED_TELEGRAM_USERS_JSON: '{"100":"Alex","200":"Sam","300":"Riley"}',
+				DEFAULT_TIME_ZONE: "America/Mexico_City",
+			}).allowedUsers.get("300"),
+		).toBe("Riley");
+		expect(
+			readConfig({
+				...baseConfig,
+				DEFAULT_TIME_ZONE: "America/Mexico_City",
+			}).defaultTimeZone,
+		).toBe("America/Mexico_City");
 		expect(() =>
 			readConfig({
 				...baseConfig,
@@ -44,6 +58,18 @@ describe("private integration boundaries", () => {
 			readConfig({
 				...baseConfig,
 				ALLOWED_TELEGRAM_USERS_JSON: '{"100":"Alex","200":"Alex"}',
+			}),
+		).toThrow();
+		expect(() =>
+			readConfig({
+				...baseConfig,
+				ALLOWED_TELEGRAM_USERS_JSON: "{}",
+			}),
+		).toThrow();
+		expect(() =>
+			readConfig({
+				...baseConfig,
+				DEFAULT_TIME_ZONE: "Not/AZone",
 			}),
 		).toThrow();
 	});
@@ -120,11 +146,12 @@ describe("private integration boundaries", () => {
 		const input = {
 			message: "dentista sábado 10 de octubre a las 18",
 			sender: "Sam",
-			nowMadrid: "09/10/26, 14:00",
+			nowLocal: "09/10/26, 14:00",
 			previousDraft: null,
 		};
 		expect(
-			(await interpretMessage(input, aiProviders, goodFetch))?.intent,
+			(await interpretMessage(input, aiProviders, goodFetch))?.interpretation
+				.intent,
 		).toBe("CREATE_EVENT");
 		const failedFetch: typeof fetch = async () =>
 			new Response("no", { status: 429 });
@@ -135,7 +162,7 @@ describe("private integration boundaries", () => {
 		const input = {
 			message: "dentista mañana a las 18",
 			sender: "Sam",
-			nowMadrid: "09/10/26, 14:00",
+			nowLocal: "09/10/26, 14:00",
 			previousDraft: null,
 		};
 		const result = {
@@ -177,7 +204,10 @@ describe("private integration boundaries", () => {
 				{ ...aiProviders, groqApiKey: "groq-key" },
 				groqFetch,
 			),
-		).toMatchObject({ intent: "CREATE_EVENT" });
+		).toMatchObject({
+			interpretation: { intent: "CREATE_EVENT" },
+			provider: "groq",
+		});
 		expect(calls).toHaveLength(1);
 		calls.length = 0;
 		const fetcher: typeof fetch = async (input) => {
@@ -200,7 +230,10 @@ describe("private integration boundaries", () => {
 				{ ...aiProviders, groqApiKey: "groq-key" },
 				fetcher,
 			),
-		).toMatchObject({ intent: "CREATE_EVENT" });
+		).toMatchObject({
+			interpretation: { intent: "CREATE_EVENT" },
+			provider: "gemini",
+		});
 		expect(calls).toHaveLength(2);
 		expect(calls[0]).toContain("api.groq.com/openai/v1/chat/completions");
 		expect(calls[1]).toContain("generativelanguage.googleapis.com");
@@ -210,7 +243,7 @@ describe("private integration boundaries", () => {
 		const input = {
 			message: "dentista mañana a las 18",
 			sender: "Sam",
-			nowMadrid: "09/10/26, 14:00",
+			nowLocal: "09/10/26, 14:00",
 			previousDraft: null,
 		};
 		const result = {
@@ -240,9 +273,10 @@ describe("private integration boundaries", () => {
 					"Bearer nv-key",
 				);
 				const body = JSON.parse(String(init?.body));
-				expect(body.model).toBe("meta/muse-glimmer-30b");
-				expect(body.temperature).toBe(0.95);
-				expect(body.max_tokens).toBe(8192);
+				expect(body.model).toBe("deepseek-ai/deepseek-v4.1-flash");
+				expect(body.temperature).toBe(1);
+				expect(body.top_p).toBe(0.95);
+				expect(body.max_tokens).toBe(4096);
 				expect(body.stream).toBe(false);
 				expect(body.reasoning_effort).toBe("low");
 				expect(body.response_format).toMatchObject({
@@ -261,7 +295,10 @@ describe("private integration boundaries", () => {
 				{ ...aiProviders, groqApiKey: "groq-key", openaiApiKey: "nv-key" },
 				fetcher,
 			),
-		).toMatchObject({ intent: "CREATE_EVENT" });
+		).toMatchObject({
+			interpretation: { intent: "CREATE_EVENT" },
+			provider: "nvidia",
+		});
 		expect(calls).toHaveLength(2);
 		expect(calls[1]).toContain("integrate.api.nvidia.com/v1/chat/completions");
 
@@ -287,7 +324,10 @@ describe("private integration boundaries", () => {
 				{ ...aiProviders, groqApiKey: "groq-key", openaiApiKey: "nv-key" },
 				exhausted,
 			),
-		).toMatchObject({ intent: "CREATE_EVENT" });
+		).toMatchObject({
+			interpretation: { intent: "CREATE_EVENT" },
+			provider: "gemini",
+		});
 		expect(calls).toHaveLength(3);
 		expect(calls[0]).toContain("api.groq.com");
 		expect(calls[1]).toContain("integrate.api.nvidia.com");
@@ -301,7 +341,7 @@ describe("private integration boundaries", () => {
 				{
 					message: "private message",
 					sender: "Sam",
-					nowMadrid: "10/10/26, 03:24",
+					nowLocal: "10/10/26, 03:24",
 					previousDraft: null,
 				},
 				{ ...aiProviders, groqApiKey: "private-key" },
@@ -328,7 +368,7 @@ describe("private integration boundaries", () => {
 		const input = {
 			message: "dentista mañana a las18",
 			sender: "Sam",
-			nowMadrid: "09/10/26, 14:00",
+			nowLocal: "09/10/26, 14:00",
 			previousDraft: null,
 		};
 		const responses = [
